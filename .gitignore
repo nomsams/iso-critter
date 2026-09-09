@@ -1,0 +1,8 @@
+# Redundant: fully unpacked already in assets/kenney-furniture-kit/extracted/
+# (License.txt included there too), keeping just the zip out saves ~5MB.
+assets/kenney-furniture-kit/kenney_furniture-kit.zip
+
+# OS cruft
+.DS_Store
+Thumbs.db
+desktop.ini

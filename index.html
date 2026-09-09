@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Iso Critter</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <aside id="panel-left">
+    <div id="critter-switch" hidden></div>
+    <div class="card" id="ident">
+      <canvas id="portrait" width="64" height="64"></canvas>
+      <div class="ident-text">
+        <div class="name-row">
+          <h1 id="c-name">Critter</h1>
+          <button id="rename-btn" class="icon-btn" title="Rename">✏️</button>
+        </div>
+        <div class="sub"><span id="c-stage">hatchling</span> &middot; <span id="c-age">day 0</span></div>
+        <div class="sub"><span id="c-mood">calm</span> &middot; <span id="c-room">Room A</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Needs</h2>
+      <div id="needs"></div>
+    </div>
+
+    <div class="card">
+      <h2>Affect</h2>
+      <div class="affect">
+        <div class="affect-plot"><canvas id="affect" width="120" height="120"></canvas></div>
+        <div class="affect-legend">
+          <div><b id="a-val">0.0</b><span>valence</span></div>
+          <div><b id="a-aro">0.0</b><span>arousal</span></div>
+          <div><b id="a-bond">0%</b><span>bond</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Doing</h2>
+      <div id="current-action">waking up…</div>
+      <div id="thoughts"></div>
+    </div>
+
+    <div class="card">
+      <h2>Skills</h2>
+      <div id="skills"></div>
+    </div>
+
+    <div class="card">
+      <h2>Aspiration</h2>
+      <div id="aspiration" class="sub"></div>
+      <div id="whim" class="whim"></div>
+    </div>
+
+    <div class="card">
+      <h2>Moodlets</h2>
+      <div id="moodlets" class="moodlets"><span class="dim">none right now</span></div>
+    </div>
+
+    <div class="card" id="friends-card" hidden>
+      <h2>Friendships</h2>
+      <div id="friends"></div>
+    </div>
+  </aside>
+
+  <main id="stage">
+    <canvas id="screen"></canvas>
+
+    <div id="click-menu" class="hidden"></div>
+
+    <section id="item-inspector" class="hidden" aria-live="polite">
+      <div class="item-copy">
+        <span class="item-eyebrow">selected item</span>
+        <strong id="item-name">Item</strong>
+        <span id="item-description">Furniture</span>
+      </div>
+      <div class="item-actions">
+        <button id="item-rotate-left" title="Rotate selected item left (Shift+R)">↶</button>
+        <button id="item-rotate" title="Rotate selected item right (R)">↷ Rotate</button>
+        <button id="item-move" title="Move selected item">↔ Move</button>
+      </div>
+      <span id="item-tip">Click the item again or choose Move</span>
+    </section>
+
+    <div id="edit-palette" class="hidden">
+      <span class="pal-label">place:</span>
+      <button data-place="chair">🪑</button>
+      <button data-place="table">🍽️</button>
+      <button data-place="sofa">🛋️</button>
+      <button data-place="tv">📺</button>
+      <button data-place="lamp">💡</button>
+      <button data-place="plant">🪴</button>
+      <button data-place="rug">🟪</button>
+      <button data-place="toybox">🧸</button>
+      <button data-place="bookshelf">📚</button>
+      <button data-place="trashcan">🗑️</button>
+      <button data-place="ball">⚽</button>
+      <button data-place="coffee_machine">☕</button>
+      <button data-place="bathtub">🛁</button>
+      <button data-place="mirror">🪞</button>
+      <button data-place="jukebox">🎵</button>
+      <button data-place="fish_tank">🐟</button>
+      <button data-place="workbench">🔨</button>
+      <button data-place="present">🎁</button>
+      <button data-place="wheel">🎡</button>
+      <button data-place="vending">🥤</button>
+      <button data-place="totem">🗿</button>
+      <button data-place="teleporter">🌀</button>
+      <button data-place="roller">➡️</button>
+      <button data-place="gate">🚧</button>
+      <button data-place="dice">🎲</button>
+      <span class="sep"></span>
+      <span class="pal-label">Kenney:</span>
+      <button data-place="armchair">🛋️</button>
+      <button data-place="bench">🪑</button>
+      <button data-place="coffee_table">☕</button>
+      <button data-place="desk">🖥️</button>
+      <button data-place="office_chair">💺</button>
+      <button data-place="side_table">🗄️</button>
+      <button data-place="small_plant">🌿</button>
+      <button data-place="radio">📻</button>
+      <button data-place="storage_box">📦</button>
+      <button data-place="bar_stool">🍸</button>
+      <button data-place="storage_cabinet">🚪</button>
+      <span class="sep"></span>
+      <button data-edit-act="rotate" id="btn-rotate" disabled>↷ rotate (R)</button>
+      <button data-edit-act="remove" id="btn-remove" disabled>✕ remove</button>
+      <button id="btn-undo" disabled title="Undo the last edit (Ctrl+Z)">↩ undo</button>
+      <span id="edit-hint" class="dim"></span>
+    </div>
+
+    <div id="paint-panel" class="hidden">
+      <span class="pal-label">room A:</span>
+      <div id="paint-a" class="swatches"></div>
+      <span class="sep"></span>
+      <span class="pal-label">room B:</span>
+      <div id="paint-b" class="swatches"></div>
+      <span class="sep"></span>
+      <span class="pal-label">room C:</span>
+      <div id="paint-c" class="swatches"></div>
+    </div>
+
+    <div id="toolbar">
+      <button data-act="pet" title="Pet the critter">✋ Pet</button>
+      <button data-act="call" title="Call it over">📣 Call</button>
+      <button data-act="snack" title="Hand it a snack">🍪 Snack</button>
+      <button data-act="tv" title="Toggle the TV">📺 TV</button>
+      <button data-act="light" title="Toggle the lights">💡 Light</button>
+      <button data-act="door" title="Lock/unlock the door">🔒 Door</button>
+      <span class="sep"></span>
+      <button data-act="edit" title="Move, add or remove furniture">🛠 Edit</button>
+      <button data-act="add-critter" title="Add another critter">➕ Critter</button>
+      <span class="sep"></span>
+      <button data-speed="1" class="speed on">1×</button>
+      <button data-speed="4" class="speed">4×</button>
+      <button data-speed="16" class="speed">16×</button>
+      <span class="sep"></span>
+      <span id="coins" title="Household coins">🪙 60</span>
+      <span id="clock">08:00</span>
+      <span id="season" title="Season & weather">🌱 clear</span>
+      <button data-act="mute" title="Mute sound">🔊</button>
+      <button data-act="debug" title="Brain inspector">🧠</button>
+      <button data-act="grid" title="Cell collision map (G)">🗺 Cells</button>
+      <button data-act="shortcuts" title="Keyboard shortcuts">⌨️</button>
+    </div>
+    <div id="shortcuts-legend" class="hidden">
+      <div class="row"><kbd>Space</kbd><span>pause / resume</span></div>
+      <div class="row"><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><span>simulation speed</span></div>
+      <div class="row"><kbd>`</kbd><span>brain inspector</span></div>
+      <div class="row"><kbd>G</kbd><span>cell collision map</span></div>
+      <div class="row"><kbd>R</kbd><span>rotate selected item</span></div>
+      <div class="row"><kbd>Shift</kbd><kbd>R</kbd><span>rotate selected item left</span></div>
+      <div class="row"><kbd>Esc</kbd><span>cancel placing furniture</span></div>
+      <div class="row"><kbd>Ctrl</kbd><kbd>Z</kbd><span>undo last edit (while editing)</span></div>
+      <div class="row"><kbd>Enter</kbd><span>confirm rename</span></div>
+    </div>
+    <div id="hint">double-click floor/rug to move &middot; click furniture to inspect &middot; right-click for actions</div>
+  </main>
+
+  <aside id="panel-right" class="hidden">
+    <div class="card">
+      <h2>Brain</h2>
+      <div class="row">
+        <label><input type="radio" name="brain" value="utility" checked> algorithmic (utility)</label>
+        <label><input type="radio" name="brain" value="neural"> neural (learned)</label>
+      </div>
+      <div class="meter-line">imitation accuracy <b id="nn-acc">—</b> <span id="nn-n">0 samples</span></div>
+      <div class="bar thin"><i id="nn-bar" style="width:0%"></i></div>
+      <div class="meter-line">avg. reward <b id="nn-reward">—</b> <span id="nn-rn">0 outcomes</span></div>
+      <div class="bar thin"><i id="nn-reward-bar" style="width:50%"></i></div>
+      <details>
+        <summary>what's this?</summary>
+        <p class="note">Two signals train the same network: it's nudged toward whatever the algorithmic brain just picked (imitation), and separately toward whichever actions actually improved wellbeing once they finished (reward) — so it can learn to do better than the hand-written brain, not just copy it.</p>
+      </details>
+    </div>
+
+    <div class="card">
+      <details>
+        <summary><h2 class="inline">Action utilities</h2></summary>
+        <div id="utils"></div>
+      </details>
+    </div>
+
+    <div class="card">
+      <details>
+        <summary><h2 class="inline">Sensory vector <span id="sv-dims" class="dim"></span></h2></summary>
+        <canvas id="sensor" width="240" height="80"></canvas>
+        <div id="sv-legend" class="dim"></div>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2>Perception</h2>
+      <div class="row"><label><input type="checkbox" id="show-vision"> draw vision cone</label></div>
+      <div class="row"><label><input type="checkbox" id="show-path"> draw path</label></div>
+      <div class="row"><label><input type="checkbox" id="show-grid"> cell collision map</label></div>
+      <div id="cell-map-legend">
+        <span class="cell-open">open</span><span class="cell-blocked">item blocked</span>
+        <span class="cell-rim">destination only</span><span class="cell-edge">wall / closed gate</span>
+        <span class="cell-current">active critter / foot</span><span class="cell-peer">other critter cells</span>
+        <span class="cell-path">complete active path</span><span class="cell-next">next path cell</span>
+      </div>
+      <details>
+        <summary>known objects</summary>
+        <div id="memlist" class="dim"></div>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2>Save</h2>
+      <div class="row">
+        <button id="btn-save">save</button>
+        <button id="btn-reset">new critter</button>
+      </div>
+      <p class="note">Autosaves every 20 s to localStorage.</p>
+    </div>
+  </aside>
+
+</div>
+<!-- Plain classic script, not type="module": module scripts refuse to load
+     over file://, which is exactly how this is meant to run (open this file
+     directly, no server). dist/bundle.js is generated from src/ by
+     build.mjs — run `node build.mjs` after editing anything under src/. -->
+<script src="dist/bundle.js"></script>
+</body>
+</html>

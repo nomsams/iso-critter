@@ -1,0 +1,291 @@
+Model: big-pickle
+
+=== ARCHITECTURAL / CORE BUGS ===
+
+[CRITICAL-CORRECTED] Fallback pathfinding drops peer-avoidance, not _noTransit
+  File: src/creature/creature.js:249-250
+  Bug: Both findPath retries pass world._noTransit as transit. The only difference is avoid=null, so a path may route THROUGH and finish ON a cell another critter is standing in.
+  Consequence: Two critters walk through each other mid-path and try to finish on the same tile; resting overlap is then resolved by exact-stack separation. NOT a wall-piercer.
+  (First pass misread this as transit=null — corrected.)
+
+[CRITICAL] Nudge/roller push check only the landing cell, not the line crossed
+  File: src/creature/creature.js:610-611 (nudge), 630-633 (roller)
+  Bug: px/py are written directly; only Math.round(landing) is tested with isWalkable. Sit cells (chair/bed/sofa) and perimeter cells are walkable by design, so the push can deposit a critter ONTO furniture or the room's rim.
+  Consequence: Critter visibly shoves a roommate onto the sofa/bed/edge, where clip and sit-pose render wrong; a large dt (tab-background spike) turns the roller's 1.4*dt step into a multi-cell jump that can skip past a 1-thick wall.
+
+[CRITICAL] Teleport action sets position without validation
+  File: src/creature/actions.js:375
+  Bug: Directly assigns c.gx/c.gy/c.px/c.py without checking walkability, bounds, or collision.
+  Consequence: Critter can teleport inside walls, outside room, or into solid objects.
+
+[HIGH] Gate missing blocksSight property
+  File: src/world/objects.js:519-536
+  Bug: Gate def lacks blocksSight: true; closed gates don't block lineOfSight.
+  Consequence: Critters "see" and pathfind to objects through closed gates; perception thinks room is connected when it's not.
+
+[HIGH] Window missing blocksSight (intentional?) but mirror/vent also lack it
+  File: src/world/objects.js:18-22, 575-586, 345-355
+  Bug: Mirror and vent are wall-mounted flats without blocksSight; window intentionally transparent?
+  Consequence: Interior sight lines pass through mirror/vent; inconsistent with wall_seg which blocks sight.
+
+[HIGH] standOn property inconsistent with collision system
+  File: src/world/objects.js:19, 576; src/world/world.js:158-161, 223-228
+  Bug: standOn adds stepCost 2.5 but doesn't add to _sitCells or _noTransit; objectAt skips flat objects so stepCost never sees it.
+  Consequence: Window/mirror treated as normal floor for pathfinding; critters path through them as shortcuts.
+
+[HIGH] Room clip doesn't account for door opening
+  File: src/render/renderer.js:88-144, 276-300
+  Bug: clipToRoom uses solid polygon for far walls; door drawn on wall but clip has no hole.
+  Consequence: Critter at door (gx=0, gy=4) clipped by wall in rotations 0/2 where door is on far edge; visual glitch when arriving/leaving.
+
+[HIGH] Plumbob and emotes drawn outside room clip
+  File: src/render/renderer.js:739-744
+  Bug: drawPlumbob and drawEmote called AFTER ctx.restore() (clip lifted).
+  Consequence: Plumbob/emotes render outside room bounds when critter at perimeter; visible in open edges.
+
+=== SITTING / FURNITURE INTERACTION BUGS ===
+
+[HIGH] Multi-cell sit furniture: actions target only origin cell
+  File: src/creature/actions.js:185 (sleep), 211 (lounge), 241 (watch_tv), 468 (soak)
+  Bug: goto targets [[o.gx, o.gy]] only; approachCells returns all footprint cells. Pathfind may reach different cell.
+  Consequence: Critter "sleeps" at foot of bed, "lounges" on wrong sofa cushion, "soaks" at wrong tub end; pose misaligned with art.
+
+[HIGH] Chair facing mismatch: approachCells returns ring, but chair only usable from open side
+  File: src/world/objects.js:688-703; src/creature/actions.js:150-156
+  Bug: useCells for chair returns all 4 neighbor cells; chair.state.face determines open side but not enforced.
+  Consequence: Critter sits "through" chair back; sits on chair from wrong side visually.
+
+[HIGH] Sofa/bed useCells returns ALL footprint cells for sitting
+  File: src/world/objects.js:690-693
+  Bug: For sit/lie furniture, useCells returns every cell of footprint (2x2 bed = 4 cells).
+  Consequence: Pathfind targets any bed cell; sleep action expects origin; critter may end up at wrong cell but use() validation passes (all cells valid).
+
+[MEDIUM] Sit validation in runTask allows any footprint cell
+  File: src/creature/creature.js:274
+  Bug: useCells(obj).some(...) checks if critter on ANY approach cell; for beds/sofas this is all footprint cells.
+  Consequence: Critter reaches wrong cell of multi-tile furniture, use() proceeds, animation plays at wrong offset.
+
+[MEDIUM] Chair sit pose doesn't account for seat height in depth sorting
+  File: src/render/renderer.js:531-535
+  Bug: seat height applied only when onIt (critter ON furniture); chair is 1x1 so critter ON it, but seatH=6 not used in depth.
+  Consequence: Critter on chair may render slightly below seat surface; minor z-fight with chair backrest.
+
+=== WALKING / MOVEMENT BUGS ===
+
+[HIGH] Perimeter cells valid destinations but clipped on far edges
+  File: src/world/world.js:150, 216-221; src/render/renderer.js:88-144
+  Bug: isPerimeter cells in _noTransit (not _blocked) so targetable; but renderer clips far edges (N/W in rot0) without lip.
+  Consequence: Critter at door (West edge rot0) or North edge clipped; legs/body cut off visually.
+
+[HIGH] Visitor spawns on perimeter (door cell)
+  File: src/main.js:142
+  Bug: Visitor created at gx=0, gy=DOOR_GY (perimeter cell).
+  Consequence: Visitor clipped on far-edge rotations; also counts as "on perimeter" for any logic checking it.
+
+[HIGH] Exact-stack separation picks random walkable neighbor without transit check
+  File: src/creature/creature.js:584-589
+  Bug: When dx=dy=0, higher-id critter steps to first isWalkable neighbor; doesn't check _noTransit/sitCells.
+  Consequence: Critter pushed onto chair, bed, or perimeter cell; may get stuck or clipped.
+
+[MEDIUM] walkStep direction computed from NEXT path step, not current
+  File: src/creature/creature.js:335-337
+  Bug: c.dir set from (nx - c.gx, ny - c.gy) where nx,ny is NEXT step; at path end, uses non-existent step.
+  Consequence: Final step direction wrong; critter faces wrong way when arriving; minor visual glitch.
+
+[MEDIUM] clampToRoom clamps to grid bounds but px/py are float centers
+  File: src/creature/creature.js:354-358
+  Bug: Math.max(0, Math.min(cols-1, c.px)) allows px=11.999 (cell 11) but not 12; correct for grid, but visual pos can be at edge.
+  Consequence: Critter visual center at tile edge; renderer draws body extending past tile; clip may cut it.
+
+[MEDIUM] Pathfinding goal validation blocks goals occupied by peers
+  File: src/world/pathfind.js:29
+  Bug: goalSet excludes cells where avoid (peers) stands, even if that peer is the target (socialize).
+  Consequence: socialize action fails to find path when peer on target adjacent cell; triggers fallback pathfind (see CRITICAL above).
+
+[LOW] randomFreeCellNear excludes sitCells and perimeter but not _noTransit fully
+  File: src/creature/creature.js:140-151
+  Bug: Checks !world._sitCells.has() and !world.isPerimeter(); but _noTransit includes both plus more.
+  Consequence: Could pick a cell that's in _noTransit for other reasons (rare); minor.
+
+=== PERCEPTION / NEURAL BUGS ===
+
+[HIGH] lineOfSight uses rounded intermediate points but objectAt uses exact bounds
+  File: src/world/world.js:300-313; src/creature/perception.js:56
+  Bug: world.lineOfSight rounds each step; perception calls with Math.floor(oc.gx) for object center.
+  Consequence: Thin walls (wall_seg) may not block sight at certain angles; critter sees through corners.
+
+[MEDIUM] Perception mixes c.gx (int) with oc.gx (float center) in lineOfSight
+  File: src/creature/perception.js:56
+  Bug: world.lineOfSight(c.gx, c.gy, Math.floor(oc.gx), Math.floor(oc.gy)) — critter at tile center? No, c.gx is Math.round(px).
+  Consequence: Slight offset in sight rays; objects at edge of vision may flicker in/out.
+
+[LOW] Neural brain reinforce scales reward by 4 arbitrarily
+  File: src/creature/neural.js:92
+  Bug: r = clamp(reward * 4, -1, 1); wellbeing deltas are small (~0.1), so *4 makes them ~0.4.
+  Consequence: Learning rate effectively 4x higher for reinforce than learn; may overshoot.
+
+=== OBJECT / WORLD BUGS ===
+
+[MEDIUM] objectAt iterates all objects O(n) per call — called heavily
+  File: src/world/world.js:172-177
+  Bug: Linear search every call; used in perceive (per object), pathfind (per step), approachCells, etc.
+  Consequence: Performance degrades with many objects; 60+ objects = noticeable lag on low-end.
+
+[MEDIUM] rebuildCollision doesn't clear _blocked before filling — wait, it does (line 207)
+  File: src/world/world.js:206-240
+  Actually correct: _blocked.fill(0) at start.
+
+[LOW] Door cell (gx=0, gy=4) is perimeter but also a gate location conceptually
+  File: src/world/world.js:17, 150
+  Bug: DOOR_GY=4 hardcoded; perimeter check catches it; no special handling for "door" vs "wall".
+  Consequence: Door cell treated same as wall cell for transit; can't path THROUGH door (correct) but also no special logic.
+
+[LOW] world._region uses Int16Array but region id can exceed 32767
+  File: src/world/world.js:131, 253-277
+  Bug: Max regions = walkable cells ≤ 156; Int16Array fine. But if map expanded, could overflow.
+  Consequence: Future-proofing; not a current bug.
+
+=== ACTION / BEHAVIOR BUGS ===
+
+[HIGH] explore_outside targets door cell directly — clipped on far edges
+  File: src/creature/actions.js:979-996
+  Bug: pick returns cell [0, DOOR_GY]; goto targets it; critter reaches door then leaveToExplore.
+  Consequence: Critter visibly clips at door in rotations 0/2 before despawning.
+
+[MEDIUM] socialize pick finds nearest peer but approach cells may be blocked
+  File: src/creature/actions.js:596-620
+  Bug: Filters adjacent cells for isWalkable && !_sitCells; but peer may be surrounded by sitCells/perimeter.
+  Consequence: socialize returns target but goto fails (no valid approach); task fails silently.
+
+[MEDIUM] answer_call doesn't validate callCell walkability at execution time
+  File: src/creature/actions.js:655-663
+  Bug: pick checks world.isWalkable at pick time; but callCell could become blocked before goto.
+  Consequence: Critter tries to walk to now-blocked cell; goto fails; task ends.
+
+[LOW] investigate action uses approachCells which for flat objects returns ring
+  File: src/creature/actions.js:1001-1022
+  Bug: Window/mirror/vent are flat; approachCells returns 8 neighbors; some may be wall/out of bounds.
+  Consequence: Critter paths to invalid cell; goto fails; investigation abandoned.
+
+=== RENDERING / VISUAL BUGS ===
+
+[MEDIUM] Tall furniture pick box height = tall + 4, but sprites extend further
+  File: src/render/renderer.js:786-789
+  Bug: pick box top at oy - o.def.tall - 4; but isoBox draws to ht, and sprites (bedDouble, loungeSofa) taller.
+  Consequence: Clicking top of tall sprite (bed headboard, fridge top) misses; clicks floor behind it.
+
+[MEDIUM] depthOfObject for standingOnSet uses 'min' (back corner) - 0.5
+  File: src/render/renderer.js:479-483
+  Bug: Furniture critter is "using" (e.g., stove) gets back-corner depth; critter at front cell gets front-corner depth + 0.4.
+  Consequence: Stove renders BEHIND critter (correct); but if critter reaches across stove, stove may render on top.
+
+[LOW] drawContactShadows uses o.fx/o.fy for mobile but o.gx/o.gy for static
+  File: src/render/renderer.js:383-384
+  Bug: Mobile objects (ball) use float pos; static use int grid. Shadow slightly misaligned for moving ball.
+  Consequence: Ball shadow jitters during roll; minor visual.
+
+[LOW] Tile hover highlight hidden when hovering furniture
+  File: src/render/renderer.js:355-370
+  Bug: drawTileHover returns early if hud.hoverObjId != null; furniture highlight drawn in drawOverlays instead.
+  Consequence: Consistent but furniture outline in drawOverlays uses different style (white vs yellow).
+
+=== SAVE / LOAD BUGS ===
+
+[LOW] LAYOUT_SIGNATURE changes on any layout edit — resets all furniture state
+  File: src/world/world.js:98, 564-571
+  Bug: Signature includes every object position; moving one piece in editor changes signature.
+  Consequence: Every edit invalidates save's furniture state (gate open/closed, fridge contents, etc.).
+
+[LOW] restore() recreates objects from save if not found in current layout
+  File: src/world/world.js:583-588
+  Bug: If DEFS[rec.type] exists, creates new object at saved position; but doesn't check canPlace.
+  Consequence: Loaded save could place furniture overlapping existing objects or out of bounds.
+
+=== NEEDS / EMOTION / MOODLET BUGS ===
+
+[LOW] need urgency uses Math.pow(1-v, 1.6) * weight — superlinear but weight varies widely
+  File: src/creature/needs.js:28-33
+  Bug: bladder weight 1.4, hygiene 0.7; at v=0.3, bladder urgency=1.4*0.7^1.6=0.7, hygiene=0.7*0.7^1.6=0.35.
+  Consequence: Bladder dominates 2x over hygiene at same fill; may be intentional.
+
+[LOW] moodlet needMods multiplies decay rates but sleep mods replace entirely
+  File: src/creature/creature.js:480-482
+  Bug: asleep mods = {hunger:0.5, energy:0, fun:0.2, social:0.4, hygiene:0.5}; moodMods multiplies.
+  Consequence: If moodlet adds hygiene*1.5 and asleep sets hygiene*0.5, result hygiene*0.75; order-dependent.
+
+=== MISC / EDGE CASES ===
+
+[LOW] Critter.bond only with player; peer relationships separate but unused in perception
+  File: src/creature/creature.js:45, 124-127
+  Bug: bond is player-only; peer relationships tracked but not in senseVec (only nearestPeerFriendship).
+  Consequence: Neural brain can't distinguish specific peer bonds; only nearest.
+
+[LOW] Critter.stageIndexSeen only updated on growth; save/restore preserves it
+  File: src/creature/creature.js:105, 491-498
+  Bug: On load, stageIndexSeen = save value; if save from older version, birthday may re-trigger.
+  Consequence: Duplicate birthday celebration on version upgrade; harmless.
+
+[LOW] World.tick processes mobile objects (ball) AFTER critter updates
+  File: src/world/world.js:519-536
+  Bug: rollMobile called in object loop during world.tick; critter.update called in main loop BEFORE world.tick.
+  Consequence: Ball moves after critter decides; critter may path to where ball WAS.
+
+[LOW] Visitor despawn logic: critters.splice idx, but visitor reference cleared AFTER
+  File: src/main.js:166-172
+  Bug: const idx = critters.indexOf(visitor); splice; if active===visitor setActive(critters[0]); visitor=null.
+  Consequence: If visitor was active, setActive called with critters[0] AFTER splice — correct. But visitor var cleared last.
+
+[LOW] Audio queue drained in render but sounds updated in world.tick (update phase)
+  File: src/world/world.js:451-462, 505-508; src/main.js:490
+  Bug: world.tick adds to audioQueue; main.js render drains it. Order: update -> render. Correct.
+  Actually fine: update (world.tick) adds sounds, then render drains queue. OK.
+
+=== SUMMARY: TOP 5 MOST IMPACTFUL ===
+
+1. Fallback pathfinding drops peer-avoidance (critters walk through each other / finish stacked)
+2. Separation/roller nudges check only the landing cell (critters shoved onto furniture/rim, big-dt teleports)
+3. Teleport action no validation (critter teleports into walls/void)
+4. Gate missing blocksSight (perception sees through closed gates)
+5. Room clip blocks door on far-edge rotations (visual clipping at entrance)
+
+=== SECOND PASS (deep architecture verification) ===
+
+[CRITICAL] Editor can permanently seal the door — furniture placed on cell [0, DOOR_GY]
+  File: src/world/world.js:343-353 (canPlace), 374-388 (moveObject); src/creature/actions.js:979-981 (explore_outside)
+  Bug: canPlace/moveObject never exclude the door cell (gx=0, gy=4, a walkable perimeter cell). Dropping any solid piece there turns it blocked.
+  Consequence: explore_outside's pick returns null forever (isWalkable false) — critters can never leave the house again, with no editor guardrail and no warning. Hard sim-lock.
+
+[CRITICAL] Visitor spawn/despawn force-writes the door cell without validation
+  File: src/main.js:142 (spawn), 160-162 (despawn)
+  Bug: createCritter and the leaving step assign gx/gy directly to [0, DOOR_GY], never checking world.isWalkable or occupancy.
+  Consequence: If the player parked furniture on the door (see above) or another critter stands there, the visitor is embedded inside a wall/table, or despawn pops it into a blocked cell. Also ignores doorLocked — visitors arrive through a locked door.
+
+[HIGH] sleep/lounge use() passes {hold:true} — option is dead code
+  File: src/creature/actions.js:190 (sleep); src/creature/creature.js:270-308 (use handler)
+  Bug: The use command sequence reads pose/fill/emote/sound but never an option named "hold". The sleep (and any other) hold flag is silently dropped.
+  Consequence: Whatever holding-behavior the action author intended (e.g. dropping the held item or gripping while lying) never happens; critters keep a held meal through a full sleep because nothing clears c.holding during use().
+
+[HIGH] stepCost never counts standOn flat objects — windows/mirrors are free paths
+  File: src/world/world.js:161-164 (stepCost), 175-180 (objectAt skips o.def.flat)
+  Bug: stepCost asks objectAt(), which ignores def.flat furniture (mirror, window, vent, rug, roller). Their standOn:true 2.5x cost can never fire.
+  Consequence: Wall-mounted mirror/window cells read as plain floor for routing; combined with their non-solid def, critters plan right through the furniture visually mounted on them.
+
+[MEDIUM] eat_at picks chairsFor[0] without checking the chair is actually free
+  File: src/creature/actions.js:47-52 (chairsFor), 150-153 (eat_at)
+  Bug: chairsFor returns every chair in the table's approach ring, nearest-first, no occupancy check against sitting peers.
+  Consequence: Two critters both select the same chair; the second one's goto fails (avoid has the seated peer) or it overlaps the sitter and the separation nudge shoves one away mid-bite.
+
+[MEDIUM] explore_outside hardcodes door cell instead of using room's reachable exit
+  File: src/creature/actions.js:979
+  Bug: Uses constant [0, DOOR_GY]; if that single cell is occupied by a visiting critter, pick depends on isWalkable only (a peer standing there doesn't block), and goto has no alternate route out.
+  Consequence: Critter walks up to a peer planted in the doorway and leavesFrom fails/stalls; only one exit cell is ever considered.
+
+[LOW] rollerAt() re-linescans all objects every call, per critter per frame
+  File: src/world/world.js:169-173
+  Bug: objects.find() linear scan inside rollerAt, invoked in each critter's update.
+  Consequence: O(objects × critters) per frame; grows with the editor's object count. Same class of hotspot as objectAt already flagged.
+
+[LOW] sleep bounds bed by origin only, but approach validates any footprint cell
+  File: src/creature/actions.js:185; src/creature/creature.js:280
+  Bug: Goto targets [bed.gx, bed.gy]; the use() precheck accepts ANY of the bed's 4 cells, so a path that lands elsewhere still lets sleep run from the wrong corner.
+  Consequence: Only matters if the origin cell is unreachable — critter then sleeps jumbled at the foot of the bed instead of rejecting the target.
