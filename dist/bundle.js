@@ -428,6 +428,32 @@ function drawSprite(ctx, x, y, name, opts = {}) {
 
 const rect = (ctx, x, y, w, h, c) => { ctx.fillStyle = c; ctx.fillRect(x, y, w, h); };
 
+/** A flat rectangle painted directly onto a wall panel that starts at the
+ *  object's own north corner (x,y) and runs one cell along the wall —
+ *  `alongW` picks the axis (true: +w/gx, matching the N wall; false: +h/gy,
+ *  matching the W wall — see wallEdgeOf in renderer.js). `u0..u1` is the
+ *  fraction along that cell, `h0..h1` the height off the floor.
+ *
+ *  boxFace (also in iso.js) looks like it should do this and doesn't: its
+ *  'left'/'right' faces are the FAR faces of a box with real depth (built
+ *  for something like the fridge's door, painted on the side facing the
+ *  camera, well clear of the box's own back corner) — both of ITS faces
+ *  start a full cell away from (x,y), not at it. Confirmed live: one axis
+ *  had the right slope but sat one whole cell off the actual wall, "hovering"
+ *  past it — using boxFace's slope but anchoring at (x,y) directly, the way
+ *  wallQuad in renderer.js already does for the structural far-wall window,
+ *  fixes both the angle and the position rather than trading one for the other. */
+function wallPanel(ctx, x, y, alongW, u0, u1, h0, h1, color) {
+  const [ex, ey] = alongW ? localOffset(1, 0) : localOffset(0, 1);
+  const p = [x, y], q = [x + ex, y + ey];
+  const at = (u, hh) => [p[0] + (q[0] - p[0]) * u, p[1] + (q[1] - p[1]) * u - hh];
+  const a = at(u0, h1), b = at(u1, h1), c = at(u1, h0), d = at(u0, h0);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.lineTo(c[0], c[1]); ctx.lineTo(d[0], d[1]);
+  ctx.closePath(); ctx.fill();
+}
+
 /** A catalog item backed by one of Kenney's four isometric sprite views.
  *  The room camera is fixed, so `state.rotation` chooses which compass view
  *  to draw and, for rectangular pieces, which way its collision footprint
@@ -812,12 +838,17 @@ const DEFS = {
   vent: {
     label: 'trash chute', w: 1, h: 1, tall: 0, solid: false, flat: true,
     acts: ['dump_trash'],
-    draw(ctx, x, y) {
-      // Painted directly onto the wall above wherever it's placed.
-      const gx = x, gy = y - 22;
-      rect(ctx, gx - 6, gy, 12, 10, '#3a3550');
-      rect(ctx, gx - 5, gy + 1, 10, 8, '#242034');
-      for (let i = 0; i < 4; i++) rect(ctx, gx - 5, gy + 1.5 + i * 2, 10, 0.8, '#4a4468');
+    draw(ctx, x, y, o) {
+      // Painted flat onto whichever wall it's actually mounted against —
+      // same reasoning as the mirror below: a plain axis-aligned rect()
+      // doesn't match either wall's real iso slope, it just happened to be
+      // less noticeably wrong on this one since it's small and dark.
+      const alongW = o.gy === 0;
+      wallPanel(ctx, x, y, alongW, 0.31, 0.69, 12, 22, '#3a3550');
+      wallPanel(ctx, x, y, alongW, 0.34, 0.66, 12.5, 21, '#242034');
+      for (let i = 0; i < 4; i++) {
+        wallPanel(ctx, x, y, alongW, 0.34, 0.66, 12.9 + i * 2, 13.5 + i * 2, '#4a4468');
+      }
     },
   },
 
@@ -992,14 +1023,25 @@ const DEFS = {
     acts: ['toggle_gate'],
     draw(ctx, x, y, o) {
       const open = o.state.open;
-      ctx.globalAlpha = open ? 0.35 : 1;
-      isoBox(ctx, x, y, 0.12, 1, 22, '#8a7355', '#6d5a42', '#584735');   // near post
-      isoBox(ctx, x, y, 1, 0.12, 22, '#8a7355', '#6d5a42', '#584735');   // far post
-      for (let i = 0; i < 4; i++) {
-        boxFace(ctx, x, y, 1, 1, 'left', 0.14, 0.94, 4 + i * 5, 7 + i * 5, '#6d5a42');   // rails
-      }
-      ctx.globalAlpha = 1;
+      // Gates default to open, so this is the everyday look of every
+      // doorway between rooms — it has to read clearly on its own, not just
+      // as "the closed version, faded." Two earlier attempts both missed:
+      // fading the whole full-height post-and-rail assembly to 0.35 alpha
+      // read as a nondescript translucent box (nothing at this size holds
+      // up that faint); un-fading the same full-height posts to mark an
+      // opening instead read as a solid, chunky wooden obstruction — technically
+      // not a barrier, but no more inviting to walk through than the closed
+      // gate was. What actually reads as "open" is short knee-high corner
+      // markers with the full rail panel gone, the way a real gate looks
+      // once it's swung back: present enough to mark the opening, nowhere
+      // near tall enough to read as blocking it.
+      const postH = open ? 9 : 22;
+      isoBox(ctx, x, y, 0.12, 1, postH, '#8a7355', '#6d5a42', '#584735');   // near post
+      isoBox(ctx, x, y, 1, 0.12, postH, '#8a7355', '#6d5a42', '#584735');   // far post
       if (!open) {
+        for (let i = 0; i < 4; i++) {
+          boxFace(ctx, x, y, 1, 1, 'left', 0.14, 0.94, 4 + i * 5, 7 + i * 5, '#6d5a42');   // rails
+        }
         ctx.fillStyle = '#e8c65a';
         ctx.fillRect(x - 1, y - 12, 2, 2);   // latch light
       }
@@ -1053,13 +1095,23 @@ const DEFS = {
   mirror: {
     label: 'mirror', w: 1, h: 1, tall: 26, solid: false, flat: true, standOn: true,
     acts: ['primp'], faceDir: 2,
-    draw(ctx, x, y) {
-      // Painted onto whichever wall it's placed against, like the window.
-      const gy = y - 30;
-      ctx.fillStyle = '#6d5a42'; ctx.fillRect(x - 6, gy, 12, 20);
-      ctx.fillStyle = '#cfe0ea'; ctx.fillRect(x - 4, gy + 2, 8, 16);
-      ctx.fillStyle = 'rgba(255,255,255,0.35)';
-      ctx.beginPath(); ctx.moveTo(x - 3, gy + 3); ctx.lineTo(x - 1, gy + 3); ctx.lineTo(x - 3, gy + 15); ctx.closePath(); ctx.fill();
+    draw(ctx, x, y, o) {
+      // Painted flat onto whichever wall it's actually mounted against. The
+      // N wall (gy=0) and W wall (gx=0) are the only two the fixed camera
+      // ever shows (see wallEdgeOf in renderer.js), and they slope in
+      // mirrored directions on screen — a plain axis-aligned fillRect (the
+      // previous approach) drew the exact same shape regardless of which
+      // wall it was on, so it only ever looked right on one of them by
+      // accident and wrong on the other. wallPanel starts exactly at this
+      // object's own (x,y) anchor and runs one cell along the correct wall
+      // axis — see its comment up top for why boxFace (tried first) isn't
+      // the right tool here despite doing the same job for fridge/stove/
+      // counter/sink: those are real box panels set back from a box corner,
+      // this is a flat decal that has to start flush at the wall itself.
+      const alongW = o.gy === 0;
+      wallPanel(ctx, x, y, alongW, 0.28, 0.72, 6, 24, '#6d5a42');
+      wallPanel(ctx, x, y, alongW, 0.34, 0.66, 8, 22, '#cfe0ea');
+      wallPanel(ctx, x, y, alongW, 0.36, 0.42, 9, 21, 'rgba(255,255,255,0.35)');
     },
   },
 
@@ -5823,10 +5875,22 @@ function createRenderer(canvas, world) {
     // preferable to the old result where the sofa painted over the critter.
     if (critters) {
       for (const c of critters) {
-        if (c.moving || c.gx < o.gx || c.gx >= o.gx + o.w || c.gy < o.gy || c.gy >= o.gy + o.h) continue;
+        if (c.gx < o.gx || c.gx >= o.gx + o.w || c.gy < o.gy || c.gy >= o.gy + o.h) continue;
         const activelyUsing = c.task?.cmd?.t === 'use' && c.task.cmd.obj === o;
         const occupiable = o.def.occupiable || o.def.sit || o.def.lie;
-        if (activelyUsing || occupiable) depth = Math.min(depth, depthOfCritter(c) - 0.01);
+        if (!c.moving && (activelyUsing || occupiable)) depth = Math.min(depth, depthOfCritter(c) - 0.01);
+        // Thin wall fragments have the opposite situation from sit furniture:
+        // their own filing cell is normal floor (see the wall_seg comment
+        // below), so a critter regularly walks straight through it — and for
+        // that whole cell, not just past whatever single px the two depth
+        // numbers happen to cross, they should stay in front of the panel's
+        // thin decorative sliver. Painter's algorithm has no pixel-level
+        // blending, so right at that one crossing px, a full sprite-width
+        // swap in either direction is visible as a pop — reported live as
+        // the wall briefly rendering in front of a critter walking along it.
+        // Pinning the whole cell to "critter's in it, wall stays behind"
+        // removes the crossover rather than just relocating it.
+        if (o.def.edgeBlock) depth = Math.min(depth, depthOfCritter(c) - 0.01);
       }
     }
     return depth;
