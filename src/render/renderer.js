@@ -254,8 +254,11 @@ export function createRenderer(canvas, world) {
       ctx.strokeStyle = 'rgba(190,210,230,0.6)'; ctx.lineWidth = 1;
       for (let i = 0; i < 10; i++) {
         const px = g + 0.14 + (i * 0.09) % 0.72;
+        // Counts UP with time, so the drop's height offset (subtracted from
+        // the sill) has to count DOWN from the pane's top (24) to its
+        // bottom (10) as this grows — the reverse read the drops as rising.
         const drop = (t * 40 + i * 7) % 14;
-        const [x0, y0] = [sx(px, 0), sy(px, 0) - 10 - drop];
+        const [x0, y0] = [sx(px, 0), sy(px, 0) - 24 + drop];
         ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x0 - 1, y0 + 3); ctx.stroke();
       }
     } else if (world.weather === 'snow') {
@@ -263,7 +266,7 @@ export function createRenderer(canvas, world) {
       for (let i = 0; i < 8; i++) {
         const px = g + 0.14 + (i * 0.11) % 0.72;
         const flake = (t * 8 + i * 5) % 14;
-        const [x0, y0] = [sx(px + Math.sin(t + i) * 0.02, 0), sy(px, 0) - 10 - flake];
+        const [x0, y0] = [sx(px + Math.sin(t + i) * 0.02, 0), sy(px, 0) - 24 + flake];
         ctx.fillRect(x0, y0, 1, 1);
       }
     }

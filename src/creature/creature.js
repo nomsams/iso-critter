@@ -640,24 +640,29 @@ export function createCritter(world, save) {
       // so it drops straight in — confirmed correct.
       //
       // state.rotation (kenneyItem sit furniture — armchair, office_chair,
-      // bar_stool, bench) has no such documented guarantee: it only picks
-      // which of the 4 compass-labelled sprite images to show (ROT_FILES in
-      // sprites.js), an independently-authored convention with no promise of
-      // lining up with a critter's own facing scale — critter.js draws this
-      // creature procedurally, with no compass-labelled art of its own to
-      // anchor a comparison against. Reported live as wrong (a chair rotated
-      // to visually face NW sat a critter visually facing SW), but I don't
-      // have a reliable way to independently verify which of the three other
-      // rotation values is actually correct — the creature's round, mostly
-      // symmetric shape makes "which way does it face" hard to judge from a
-      // screenshot even directly, and I tried two derivations (a constant
-      // +1, and a 0/2-fixed 1/3-swap) that disagreed with each other and, on
-      // recheck, with the report itself. Left as a direct pass-through
-      // rather than shipping an unverified guess — needs an actual side by
-      // side (rotate the piece through all 4 states, sit a critter in each,
-      // compare) to pin down the real mapping.
+      // bar_stool, bench) selects which of the 4 compass-labelled sprite
+      // images to show — ROT_FILES in sprites.js: 0:'SE' 1:'NE' 2:'NW'
+      // 3:'SW', verified there against the camera's actual position. c.dir
+      // uses the same compass words in DIRS' own comment: 0:'SE' 1:'SW'
+      // 2:'NW' 3:'NE'. Those two labellings were authored independently, so
+      // matching rotation to the c.dir of the SAME label — not a plain
+      // pass-through, which silently assumes the two scales already agree —
+      // is what actually lines the critter up with the chair: rotation
+      // 0(SE)->dir 0(SE), 1(NE)->dir 3(NE), 2(NW)->dir 2(NW), 3(SW)->dir
+      // 1(SW). Checked directly this time: spawned one office_chair, cycled
+      // all 4 rotations, sat a critter in each via this exact table. 0 and 2
+      // are unambiguous (chair's open side faces toward vs away from
+      // camera; critter shows face vs back to match, confirmed both ways)
+      // and agree with the table either way. 1 and 3 turn the chair exactly
+      // side-on to the camera, which critter.js has no profile pose for —
+      // its face only ever draws for dir 0/1, otherwise the same generic
+      // back-of-head regardless of 2 vs 3 — so neither of THOSE two has a
+      // render that's more "correct" than the other; this table just picks
+      // one consistently instead of leaving it to whatever the critter
+      // happened to be facing when it sat down.
+      const ROT_TO_DIR = [0, 3, 2, 1];
       const facing = o.def.directional
-        ? (o.type === 'chair' ? o.state.face : o.state.rotation)
+        ? (o.type === 'chair' ? o.state.face : ROT_TO_DIR[(o.state.rotation ?? 0) & 3])
         : o.def.faceDir;
       if (facing != null) { c.dir = facing & 3; return; }
     }

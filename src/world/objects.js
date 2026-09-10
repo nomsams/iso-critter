@@ -44,7 +44,7 @@ function kenneyItem(label, sprite, opts = {}) {
   const {
     w = 1, h = 1, tall = 20, solid = true, acts = [],
     sit = false, lie = false, occupiable = false, seatH = 6, surface = false,
-    blocksSight = false, thirsty = false,
+    blocksSight = false, thirsty = false, scale = 1,
   } = opts;
   return {
     label, w, h, tall, solid, acts, sit, lie, occupiable, seatH, surface,
@@ -54,7 +54,7 @@ function kenneyItem(label, sprite, opts = {}) {
     rotatesFootprint: w !== h,
     draw(ctx, x, y, o) {
       if (drawSprite(ctx, x, y, sprite, {
-        w: o.w, h: o.h, angleOffset: o.state.rotation ?? 0,
+        w: o.w, h: o.h, angleOffset: o.state.rotation ?? 0, scale,
       })) return;
       // Assets are preloaded, but retain a small physical placeholder for the
       // very first frame on a slow disk rather than letting the piece vanish.
@@ -205,7 +205,11 @@ export const DEFS = {
     // wrong next to a bathtub/shower that are properly entered. Joining the
     // same occupiable category (footprint becomes the destination, not a
     // ring around it) fixes both the pose and the position at once.
-    label: 'toilet', w: 1, h: 1, tall: 16, solid: false, sit: true, seatH: 6, faceDir: 1,
+    // faceDir 3 (-gy): the art isn't wall-mounted or rotatable, it's always
+    // drawn the same way, so this is a fixed compass direction rather than
+    // something derived per-placement — it needs to face into whichever
+    // wall the fixture is set against, not out into the room toward camera.
+    label: 'toilet', w: 1, h: 1, tall: 16, solid: false, sit: true, seatH: 6, faceDir: 3,
     acts: ['relieve'],
     draw(ctx, x, y) {
       isoBox(ctx, x + 3, y + 4, 0.5, 0.5, 8, PAL.white, PAL.whiteD, PAL.whiteS);
@@ -605,27 +609,24 @@ export const DEFS = {
     acts: ['toggle_gate'],
     draw(ctx, x, y, o) {
       const open = o.state.open;
-      // Gates default to open, so this is the everyday look of every
-      // doorway between rooms — it has to read clearly on its own, not just
-      // as "the closed version, faded." Two earlier attempts both missed:
-      // fading the whole full-height post-and-rail assembly to 0.35 alpha
-      // read as a nondescript translucent box (nothing at this size holds
-      // up that faint); un-fading the same full-height posts to mark an
-      // opening instead read as a solid, chunky wooden obstruction — technically
-      // not a barrier, but no more inviting to walk through than the closed
-      // gate was. What actually reads as "open" is short knee-high corner
-      // markers with the full rail panel gone, the way a real gate looks
-      // once it's swung back: present enough to mark the opening, nowhere
-      // near tall enough to read as blocking it.
-      const postH = open ? 9 : 22;
-      isoBox(ctx, x, y, 0.12, 1, postH, '#8a7355', '#6d5a42', '#584735');   // near post
-      isoBox(ctx, x, y, 1, 0.12, postH, '#8a7355', '#6d5a42', '#584735');   // far post
+      // A single hinged panel, not a pair of corner posts marking an
+      // opening — two earlier attempts (faded full-height posts, then
+      // un-faded short posts) both dropped the one thing that actually
+      // reads as "a door": a panel that swings. This one pivots at the
+      // same hinge corner (x,y) for both states — closed, it lies flat
+      // across the doorway, along the wall; open, it's the same panel
+      // turned 90° to lie along the OTHER axis, swung back out of the
+      // way. Height stays constant throughout, since a real door doesn't
+      // get shorter when it opens — it just turns.
+      const thick = 0.1, len = 0.82, tall = 20;
+      const [pw, ph] = open ? [thick, len] : [len, thick];
+      isoBox(ctx, x, y, pw, ph, tall, '#8a7355', '#6d5a42', '#584735');
       if (!open) {
         for (let i = 0; i < 4; i++) {
-          boxFace(ctx, x, y, 1, 1, 'left', 0.14, 0.94, 4 + i * 5, 7 + i * 5, '#6d5a42');   // rails
+          boxFace(ctx, x, y, pw, ph, 'left', 0.1, 0.9, 3 + i * 4, 6 + i * 4, '#6d5a42');   // rails
         }
         ctx.fillStyle = '#e8c65a';
-        ctx.fillRect(x - 1, y - 12, 2, 2);   // latch light
+        ctx.fillRect(x - 1, y - 10, 2, 2);   // latch light
       }
     },
   },
@@ -774,6 +775,11 @@ export const DEFS = {
   }),
   office_chair: kenneyItem('desk chair', 'chairDesk', {
     tall: 23, solid: false, sit: true, seatH: 7, acts: ['lounge'],
+    // Kenney's 5-star caster base is modeled a little wider than the rest
+    // of the chair, so at a plain 1-tile width it splays past the tile's
+    // own edges. Trimmed down as a whole (not just the base) so nothing
+    // about the chair looks stretched relative to itself.
+    scale: 0.88,
   }),
   side_table: kenneyItem('drawer side table', 'sideTableDrawers', {
     tall: 21, surface: true,

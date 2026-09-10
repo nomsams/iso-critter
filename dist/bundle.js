@@ -462,7 +462,7 @@ function kenneyItem(label, sprite, opts = {}) {
   const {
     w = 1, h = 1, tall = 20, solid = true, acts = [],
     sit = false, lie = false, occupiable = false, seatH = 6, surface = false,
-    blocksSight = false, thirsty = false,
+    blocksSight = false, thirsty = false, scale = 1,
   } = opts;
   return {
     label, w, h, tall, solid, acts, sit, lie, occupiable, seatH, surface,
@@ -472,7 +472,7 @@ function kenneyItem(label, sprite, opts = {}) {
     rotatesFootprint: w !== h,
     draw(ctx, x, y, o) {
       if (drawSprite(ctx, x, y, sprite, {
-        w: o.w, h: o.h, angleOffset: o.state.rotation ?? 0,
+        w: o.w, h: o.h, angleOffset: o.state.rotation ?? 0, scale,
       })) return;
       // Assets are preloaded, but retain a small physical placeholder for the
       // very first frame on a slow disk rather than letting the piece vanish.
@@ -623,7 +623,11 @@ const DEFS = {
     // wrong next to a bathtub/shower that are properly entered. Joining the
     // same occupiable category (footprint becomes the destination, not a
     // ring around it) fixes both the pose and the position at once.
-    label: 'toilet', w: 1, h: 1, tall: 16, solid: false, sit: true, seatH: 6, faceDir: 1,
+    // faceDir 3 (-gy): the art isn't wall-mounted or rotatable, it's always
+    // drawn the same way, so this is a fixed compass direction rather than
+    // something derived per-placement — it needs to face into whichever
+    // wall the fixture is set against, not out into the room toward camera.
+    label: 'toilet', w: 1, h: 1, tall: 16, solid: false, sit: true, seatH: 6, faceDir: 3,
     acts: ['relieve'],
     draw(ctx, x, y) {
       isoBox(ctx, x + 3, y + 4, 0.5, 0.5, 8, PAL.white, PAL.whiteD, PAL.whiteS);
@@ -1023,27 +1027,24 @@ const DEFS = {
     acts: ['toggle_gate'],
     draw(ctx, x, y, o) {
       const open = o.state.open;
-      // Gates default to open, so this is the everyday look of every
-      // doorway between rooms — it has to read clearly on its own, not just
-      // as "the closed version, faded." Two earlier attempts both missed:
-      // fading the whole full-height post-and-rail assembly to 0.35 alpha
-      // read as a nondescript translucent box (nothing at this size holds
-      // up that faint); un-fading the same full-height posts to mark an
-      // opening instead read as a solid, chunky wooden obstruction — technically
-      // not a barrier, but no more inviting to walk through than the closed
-      // gate was. What actually reads as "open" is short knee-high corner
-      // markers with the full rail panel gone, the way a real gate looks
-      // once it's swung back: present enough to mark the opening, nowhere
-      // near tall enough to read as blocking it.
-      const postH = open ? 9 : 22;
-      isoBox(ctx, x, y, 0.12, 1, postH, '#8a7355', '#6d5a42', '#584735');   // near post
-      isoBox(ctx, x, y, 1, 0.12, postH, '#8a7355', '#6d5a42', '#584735');   // far post
+      // A single hinged panel, not a pair of corner posts marking an
+      // opening — two earlier attempts (faded full-height posts, then
+      // un-faded short posts) both dropped the one thing that actually
+      // reads as "a door": a panel that swings. This one pivots at the
+      // same hinge corner (x,y) for both states — closed, it lies flat
+      // across the doorway, along the wall; open, it's the same panel
+      // turned 90° to lie along the OTHER axis, swung back out of the
+      // way. Height stays constant throughout, since a real door doesn't
+      // get shorter when it opens — it just turns.
+      const thick = 0.1, len = 0.82, tall = 20;
+      const [pw, ph] = open ? [thick, len] : [len, thick];
+      isoBox(ctx, x, y, pw, ph, tall, '#8a7355', '#6d5a42', '#584735');
       if (!open) {
         for (let i = 0; i < 4; i++) {
-          boxFace(ctx, x, y, 1, 1, 'left', 0.14, 0.94, 4 + i * 5, 7 + i * 5, '#6d5a42');   // rails
+          boxFace(ctx, x, y, pw, ph, 'left', 0.1, 0.9, 3 + i * 4, 6 + i * 4, '#6d5a42');   // rails
         }
         ctx.fillStyle = '#e8c65a';
-        ctx.fillRect(x - 1, y - 12, 2, 2);   // latch light
+        ctx.fillRect(x - 1, y - 10, 2, 2);   // latch light
       }
     },
   },
@@ -1192,6 +1193,11 @@ const DEFS = {
   }),
   office_chair: kenneyItem('desk chair', 'chairDesk', {
     tall: 23, solid: false, sit: true, seatH: 7, acts: ['lounge'],
+    // Kenney's 5-star caster base is modeled a little wider than the rest
+    // of the chair, so at a plain 1-tile width it splays past the tile's
+    // own edges. Trimmed down as a whole (not just the base) so nothing
+    // about the chair looks stretched relative to itself.
+    scale: 0.88,
   }),
   side_table: kenneyItem('drawer side table', 'sideTableDrawers', {
     tall: 21, surface: true,
@@ -4734,24 +4740,29 @@ function createCritter(world, save) {
       // so it drops straight in — confirmed correct.
       //
       // state.rotation (kenneyItem sit furniture — armchair, office_chair,
-      // bar_stool, bench) has no such documented guarantee: it only picks
-      // which of the 4 compass-labelled sprite images to show (ROT_FILES in
-      // sprites.js), an independently-authored convention with no promise of
-      // lining up with a critter's own facing scale — critter.js draws this
-      // creature procedurally, with no compass-labelled art of its own to
-      // anchor a comparison against. Reported live as wrong (a chair rotated
-      // to visually face NW sat a critter visually facing SW), but I don't
-      // have a reliable way to independently verify which of the three other
-      // rotation values is actually correct — the creature's round, mostly
-      // symmetric shape makes "which way does it face" hard to judge from a
-      // screenshot even directly, and I tried two derivations (a constant
-      // +1, and a 0/2-fixed 1/3-swap) that disagreed with each other and, on
-      // recheck, with the report itself. Left as a direct pass-through
-      // rather than shipping an unverified guess — needs an actual side by
-      // side (rotate the piece through all 4 states, sit a critter in each,
-      // compare) to pin down the real mapping.
+      // bar_stool, bench) selects which of the 4 compass-labelled sprite
+      // images to show — ROT_FILES in sprites.js: 0:'SE' 1:'NE' 2:'NW'
+      // 3:'SW', verified there against the camera's actual position. c.dir
+      // uses the same compass words in DIRS' own comment: 0:'SE' 1:'SW'
+      // 2:'NW' 3:'NE'. Those two labellings were authored independently, so
+      // matching rotation to the c.dir of the SAME label — not a plain
+      // pass-through, which silently assumes the two scales already agree —
+      // is what actually lines the critter up with the chair: rotation
+      // 0(SE)->dir 0(SE), 1(NE)->dir 3(NE), 2(NW)->dir 2(NW), 3(SW)->dir
+      // 1(SW). Checked directly this time: spawned one office_chair, cycled
+      // all 4 rotations, sat a critter in each via this exact table. 0 and 2
+      // are unambiguous (chair's open side faces toward vs away from
+      // camera; critter shows face vs back to match, confirmed both ways)
+      // and agree with the table either way. 1 and 3 turn the chair exactly
+      // side-on to the camera, which critter.js has no profile pose for —
+      // its face only ever draws for dir 0/1, otherwise the same generic
+      // back-of-head regardless of 2 vs 3 — so neither of THOSE two has a
+      // render that's more "correct" than the other; this table just picks
+      // one consistently instead of leaving it to whatever the critter
+      // happened to be facing when it sat down.
+      const ROT_TO_DIR = [0, 3, 2, 1];
       const facing = o.def.directional
-        ? (o.type === 'chair' ? o.state.face : o.state.rotation)
+        ? (o.type === 'chair' ? o.state.face : ROT_TO_DIR[(o.state.rotation ?? 0) & 3])
         : o.def.faceDir;
       if (facing != null) { c.dir = facing & 3; return; }
     }
@@ -5657,8 +5668,11 @@ function createRenderer(canvas, world) {
       ctx.strokeStyle = 'rgba(190,210,230,0.6)'; ctx.lineWidth = 1;
       for (let i = 0; i < 10; i++) {
         const px = g + 0.14 + (i * 0.09) % 0.72;
+        // Counts UP with time, so the drop's height offset (subtracted from
+        // the sill) has to count DOWN from the pane's top (24) to its
+        // bottom (10) as this grows — the reverse read the drops as rising.
         const drop = (t * 40 + i * 7) % 14;
-        const [x0, y0] = [sx(px, 0), sy(px, 0) - 10 - drop];
+        const [x0, y0] = [sx(px, 0), sy(px, 0) - 24 + drop];
         ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x0 - 1, y0 + 3); ctx.stroke();
       }
     } else if (world.weather === 'snow') {
@@ -5666,7 +5680,7 @@ function createRenderer(canvas, world) {
       for (let i = 0; i < 8; i++) {
         const px = g + 0.14 + (i * 0.11) % 0.72;
         const flake = (t * 8 + i * 5) % 14;
-        const [x0, y0] = [sx(px + Math.sin(t + i) * 0.02, 0), sy(px, 0) - 10 - flake];
+        const [x0, y0] = [sx(px + Math.sin(t + i) * 0.02, 0), sy(px, 0) - 24 + flake];
         ctx.fillRect(x0, y0, 1, 1);
       }
     }
