@@ -1393,10 +1393,20 @@ const LAYOUT = [
   ['toilet', 9, 0], ['shower', 10, 0],
   // left wall (gx=0): bookshelf up top, door mid-wall (kept clear)
   ['bookshelf', 0, 2],
-  // room A interior: dining, a teleporter pad and roller to play with
+  // room A interior: dining, a teleporter pad and roller to play with.
+  // The teleporter used to sit at (1,4) — right next to the door at
+  // (0, DOOR_GY=4). With both a stone's throw from wherever a critter was
+  // already standing, use_teleporter and explore_outside routinely scored
+  // within a hair of each other (both include a travel(t) term that's
+  // near-zero for either target from right there), and the brain re-deciding
+  // every think tick could flip between them before either finished —
+  // reads as a critter stuck bouncing between the door and the teleporter,
+  // even though each action's own destination logic is correct on its own.
+  // Moved it two rows clear of the door's row entirely so the two stop
+  // being each other's closest-scoring neighbor.
   ['table', 5, 3], ['chair', 5, 4, { state: { face: 3 } }], ['chair', 6, 4, { state: { face: 3 } }],
   ['plant', 3, 2], ['plant', 11, 3],
-  ['teleporter', 1, 4, { state: { pairId: 'A' } }], ['roller', 3, 4, { state: { dir: 1 } }],
+  ['teleporter', 3, 3, { state: { pairId: 'A' } }], ['roller', 3, 4, { state: { dir: 1 } }],
 
   // dividing wall #1, one tile at a time, with a gap at GATE_GX
   ...Array.from({ length: COLS }, (_, gx) => gx)
@@ -4667,7 +4677,30 @@ function createCritter(world, save) {
     const onIt = canOccupyObject(o) && o.gx <= c.gx && c.gx < o.gx + o.w
       && o.gy <= c.gy && c.gy < o.gy + o.h;
     if (onIt) {
-      const facing = o.def.directional ? (o.type === 'chair' ? o.state.face : o.state.rotation) : o.def.faceDir;
+      // state.face (plain chairs) is defined in world/objects.js as "which
+      // way the seat opens" using this exact 0:+gx 1:+gy 2:-gx 3:-gy scale,
+      // so it drops straight in — confirmed correct.
+      //
+      // state.rotation (kenneyItem sit furniture — armchair, office_chair,
+      // bar_stool, bench) has no such documented guarantee: it only picks
+      // which of the 4 compass-labelled sprite images to show (ROT_FILES in
+      // sprites.js), an independently-authored convention with no promise of
+      // lining up with a critter's own facing scale — critter.js draws this
+      // creature procedurally, with no compass-labelled art of its own to
+      // anchor a comparison against. Reported live as wrong (a chair rotated
+      // to visually face NW sat a critter visually facing SW), but I don't
+      // have a reliable way to independently verify which of the three other
+      // rotation values is actually correct — the creature's round, mostly
+      // symmetric shape makes "which way does it face" hard to judge from a
+      // screenshot even directly, and I tried two derivations (a constant
+      // +1, and a 0/2-fixed 1/3-swap) that disagreed with each other and, on
+      // recheck, with the report itself. Left as a direct pass-through
+      // rather than shipping an unverified guess — needs an actual side by
+      // side (rotate the piece through all 4 states, sit a critter in each,
+      // compare) to pin down the real mapping.
+      const facing = o.def.directional
+        ? (o.type === 'chair' ? o.state.face : o.state.rotation)
+        : o.def.faceDir;
       if (facing != null) { c.dir = facing & 3; return; }
     }
     const cc = world.center(o);
@@ -4996,7 +5029,18 @@ function drawCritter(ctx, x, y, c, t, opts = {}) {
   if (pose === 'peer') { lean = 0.4; }
   if (pose === 'groom') { lean = -0.3; }
 
-  const bx = x, by = y + 8 - lift + breathe * 0.5;
+  // `y` is the tile's north corner (sy(c.px,c.py)); the +8 (=HH) below
+  // descends to the tile's true centre. Anchoring the BODY's own origin
+  // there left the feet — drawn further south still, at local y = bh*0.52
+  // below this origin — sitting well past true centre instead of on it,
+  // which is what actually reads as "standing in the cell" at a glance.
+  // Pull the whole body back up by exactly that local offset (measured at
+  // neutral stand, not the current pose's squash, so a seated/lying
+  // critter's own separate seat-height lift still layers on top of a
+  // correctly-grounded stand baseline rather than compounding with it) so
+  // the feet — not the torso — land on the tile's true centre.
+  const FEET_DROP = 10.5 * s * 0.52;
+  const bx = x, by = y + 8 - FEET_DROP - lift + breathe * 0.5;
   const bw = 9 * s, bh = 10.5 * s * squash;
 
   // shadow
@@ -5798,10 +5842,11 @@ function createRenderer(canvas, world) {
     // displacement in the painter even after the sprite anchor was fixed.
     const [rx, ry] = rot(c.px, c.py);
     const scale = c.stage?.scale ?? 1;
-    // Mirrors drawCritter's neutral ground contact: body origin + foot centre
-    // + foot radius. Deliberately exclude walk bob/breathing so the layer does
-    // not flicker on every animation frame.
-    const footPixels = 8 + 10.5 * scale * 0.52 + 1.7 * scale;
+    // Mirrors drawCritter's neutral ground contact: body origin (now the
+    // tile's true centre — see the FEET_DROP correction in critter.js) plus
+    // the foot radius past it. Deliberately exclude walk bob/breathing so the
+    // layer does not flicker on every animation frame.
+    const footPixels = 8 + 1.7 * scale;
     return rx + ry + footPixels / HH + 0.01; // living subject wins exact ties
   }
 
@@ -6001,11 +6046,33 @@ function createRenderer(canvas, world) {
         ctx.fillText(isActive ? 'C' : `C${cr.id}`, sx(cr.gx + 0.5, cr.gy + 0.5), sy(cr.gx + 0.5, cr.gy + 0.5) + 5);
       }
 
-      if (active && !active.away) {
-        ctx.beginPath();
-        ctx.arc(sx(active.px + 0.5, active.py + 0.5), sy(active.px + 0.5, active.py + 0.5), 2.2, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(71,220,255,1)';
-        ctx.fill();
+      // Three reference points per critter, so a foot/cell mismatch shows up
+      // directly instead of needing to eyeball it: red is the tile's own true
+      // centre (independent of the critter entirely — sx/sy(px,py)+HH, same
+      // as the tile diamonds above); green is drawCritter's body-origin
+      // anchor; blue is that body's own feet. Green and blue coinciding with
+      // red is the FEET_DROP fix in critter.js doing its job — the point of
+      // this overlay is to make that checkable at a glance, live, rather
+      // than asserted from code alone.
+      const dot = (px, py, color) => {
+        ctx.beginPath(); ctx.arc(px, py, 2, 0, Math.PI * 2);
+        ctx.fillStyle = color; ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 0.6; ctx.stroke();
+      };
+      for (const cr of critters) {
+        if (cr.away) continue;
+        const s = cr.stage.scale;
+        let lift = 0, squash = 1;
+        if (cr.pose === 'walk') { const wp = Math.sin(cr.bob); lift = Math.abs(wp) * 1.6; squash = 1 + wp * 0.03; }
+        if (cr.pose === 'sit' || cr.pose === 'read') { lift = -3; squash = 0.86; }
+        if (cr.pose === 'lie') { lift = -5; squash = 0.62; }
+        const anchorX = sx(cr.px, cr.py), anchorY = sy(cr.px, cr.py);
+        const cellCenterY = anchorY + HH; // true tile centre, per tilePath's own geometry above
+        const bodyY = anchorY + 8 - 10.5 * s * 0.52 - lift; // drawCritter's (bx,by) post-fix (breathe omitted, sub-pixel)
+        const feetY = bodyY + 10.5 * s * squash * 0.52;
+        dot(anchorX, cellCenterY, '#ff2d55');
+        dot(anchorX, bodyY, '#39ff14');
+        dot(anchorX, feetY, '#2d8bff');
       }
       ctx.restore();
     }

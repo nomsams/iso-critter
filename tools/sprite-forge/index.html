@@ -30,6 +30,15 @@
     width: 34px; height: 34px; border-radius: 50%;
   }
   #compass button.active { background: #4a7dff; border-color: #7ea0ff; color: #fff; }
+  #pose-buttons button, #approach-mode-buttons button, #frontdir-buttons button {
+    flex: 1 1 auto; font-size: 11px; padding: 6px 8px;
+  }
+  #pose-buttons button.active, #approach-mode-buttons button.active, #frontdir-buttons button.active {
+    background: #4a7dff; border-color: #7ea0ff; color: #fff;
+  }
+  #reach-side-row button { padding: 4px 10px; }
+  #pose-height-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  #pose-height-row input[type=range] { flex: 1 1 100%; }
   #calib-readout {
     position: absolute; top: 10px; right: 10px; font-size: 11px; color: #8a8d99; text-align: right;
     background: #1b1c2299; padding: 4px 7px; border-radius: 4px;
@@ -100,8 +109,9 @@
 
   <h2>Model</h2>
   <section>
-    <label>Known Kenney model
-      <select id="known-model"></select>
+    <label>Known Kenney model (type to search)
+      <input id="known-model" list="known-model-list" autocomplete="off" placeholder="e.g. armchair, toilet, bedDouble…" />
+      <datalist id="known-model-list"></datalist>
     </label>
     <button id="load-known" style="width:100%; margin-bottom:10px;">Load selected</button>
     <div id="dropzone">Drop a .glb/.gltf file here, or
@@ -119,7 +129,7 @@
       <label>Width (cells)<input id="fp-w" type="number" min="1" max="6" step="1" value="1"></label>
       <label>Depth (cells)<input id="fp-h" type="number" min="1" max="6" step="1" value="1"></label>
     </div>
-    <div class="hint">Matches the <code>w</code>/<code>h</code> you'll give the furniture def in objects.js. The sprite's own aspect ratio decides its height — the def's own <code>tall</code> field only caps it at draw time (see sprites.js), it isn't something to bake into the export.</div>
+    <div class="hint">Matches the <code>w</code>/<code>h</code> you'll give the furniture def in objects.js.</div>
   </section>
 
   <h2>Placement</h2>
@@ -127,6 +137,10 @@
     <label><span>Scale <b id="v-scale">1.00</b></span>
       <input id="scale" type="range" min="0.05" max="6" step="0.01" value="1">
     </label>
+    <label><span>Preview <code>tall</code> cap (px) <b id="v-tallcap">off</b></span>
+      <input id="tallcap" type="range" min="0" max="60" step="1" value="0">
+    </label>
+    <div class="hint">A real-proportioned model fit to a 1-cell footprint is routinely much taller than this game's own furniture ever renders — every def caps <code>tall</code> at 10-36px (chair:10, sofa:20, fridge:30, lamp:36 — see objects.js), and sprites.js's <code>drawImage</code> <em>squashes</em> the whole sprite into that shorter box rather than cropping it. This slider previews that exact squash so the critter comparison means something; it's never baked into the export — the PNG always keeps the model's true proportions, same as every other sprite already in the game, and the game applies its own def's <code>tall</code> at draw time.</div>
     <div class="row">
       <label><span>Offset X <b id="v-offx">0.00</b></span><input id="offx" type="range" min="-1" max="1" step="0.01" value="0"></label>
       <label><span>Offset Z <b id="v-offz">0.00</b></span><input id="offz" type="range" min="-1" max="1" step="0.01" value="0"></label>
@@ -140,12 +154,53 @@
 
   <h2>Framing</h2>
   <section>
+    <label><span>Zoom <b id="v-zoom">1.00×</b></span>
+      <input id="zoom" type="range" min="0.4" max="4" step="0.01" value="1">
+    </label>
     <label><span>Margin <b id="v-margin">6%</b></span>
       <input id="margin" type="range" min="0" max="30" step="1" value="6">
     </label>
-    <label class="toggle"><input id="show-grid" type="checkbox" checked> Show footprint grid</label>
+    <div class="hint">Zoom scales the whole view around the piece's own ground anchor. Margin only pads the top/sides — the bottom edge always sits exactly on the anchor, with no slack, so the export needs no cropping.</div>
+    <label class="toggle"><input id="show-grid" type="checkbox" checked> Show floor, grid &amp; shadows</label>
     <label class="toggle"><input id="show-critter" type="checkbox" checked> Show critter reference (approx. scale)</label>
     <label class="toggle"><input id="freelook" type="checkbox"> Free-look inspect (orbit, not export view)</label>
+  </section>
+
+  <h2>Critter Pose</h2>
+  <section>
+    <div class="btnrow" id="pose-buttons">
+      <button data-pose="stand" class="active">Stand (scale ref)</button>
+      <button data-pose="sit">Sit</button>
+      <button data-pose="lie">Lie down</button>
+      <button data-pose="reach">Reach / grab</button>
+    </div>
+    <div class="hint" id="pose-explainer">Beside the piece — same as the scale reference, just named for what it's checking.</div>
+    <label id="pose-height-row" hidden><span id="pose-height-label">Height</span> <b id="v-pose-height">0.24</b>
+      <input id="pose-height" type="range" min="0" max="1" step="0.01" value="0.24">
+    </label>
+  </section>
+
+  <h2>Approach Direction</h2>
+  <section>
+    <div class="btnrow" id="approach-mode-buttons">
+      <button data-mode="all" class="active">All sides</button>
+      <button data-mode="front">Front only</button>
+      <button data-mode="notback">All but back</button>
+    </div>
+    <div class="row">
+      <div class="btnrow" id="frontdir-buttons">
+        <button data-dir="3">−Z</button>
+        <button data-dir="0">+X</button>
+        <button data-dir="1" class="active">+Z</button>
+        <button data-dir="2">−X</button>
+      </div>
+    </div>
+    <div class="hint" id="approach-hint">Matches adjacentCells() in objects.js: no frontDir/backDir on the def means every side works — workbench, plant, lamp, aquarium.</div>
+    <label id="reach-side-row" class="toggle" hidden style="justify-content:space-between;">
+      <button id="reach-side-prev" type="button">◀</button>
+      <span id="reach-side-label" style="flex:1; text-align:center;">+Z (south)</span>
+      <button id="reach-side-next" type="button">▶</button>
+    </label>
   </section>
 
   <h2>Export</h2>

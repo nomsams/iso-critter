@@ -42,7 +42,18 @@ export function drawCritter(ctx, x, y, c, t, opts = {}) {
   if (pose === 'peer') { lean = 0.4; }
   if (pose === 'groom') { lean = -0.3; }
 
-  const bx = x, by = y + 8 - lift + breathe * 0.5;
+  // `y` is the tile's north corner (sy(c.px,c.py)); the +8 (=HH) below
+  // descends to the tile's true centre. Anchoring the BODY's own origin
+  // there left the feet — drawn further south still, at local y = bh*0.52
+  // below this origin — sitting well past true centre instead of on it,
+  // which is what actually reads as "standing in the cell" at a glance.
+  // Pull the whole body back up by exactly that local offset (measured at
+  // neutral stand, not the current pose's squash, so a seated/lying
+  // critter's own separate seat-height lift still layers on top of a
+  // correctly-grounded stand baseline rather than compounding with it) so
+  // the feet — not the torso — land on the tile's true centre.
+  const FEET_DROP = 10.5 * s * 0.52;
+  const bx = x, by = y + 8 - FEET_DROP - lift + breathe * 0.5;
   const bw = 9 * s, bh = 10.5 * s * squash;
 
   // shadow

@@ -57,10 +57,20 @@ const LAYOUT = [
   ['toilet', 9, 0], ['shower', 10, 0],
   // left wall (gx=0): bookshelf up top, door mid-wall (kept clear)
   ['bookshelf', 0, 2],
-  // room A interior: dining, a teleporter pad and roller to play with
+  // room A interior: dining, a teleporter pad and roller to play with.
+  // The teleporter used to sit at (1,4) — right next to the door at
+  // (0, DOOR_GY=4). With both a stone's throw from wherever a critter was
+  // already standing, use_teleporter and explore_outside routinely scored
+  // within a hair of each other (both include a travel(t) term that's
+  // near-zero for either target from right there), and the brain re-deciding
+  // every think tick could flip between them before either finished —
+  // reads as a critter stuck bouncing between the door and the teleporter,
+  // even though each action's own destination logic is correct on its own.
+  // Moved it two rows clear of the door's row entirely so the two stop
+  // being each other's closest-scoring neighbor.
   ['table', 5, 3], ['chair', 5, 4, { state: { face: 3 } }], ['chair', 6, 4, { state: { face: 3 } }],
   ['plant', 3, 2], ['plant', 11, 3],
-  ['teleporter', 1, 4, { state: { pairId: 'A' } }], ['roller', 3, 4, { state: { dir: 1 } }],
+  ['teleporter', 3, 3, { state: { pairId: 'A' } }], ['roller', 3, 4, { state: { dir: 1 } }],
 
   // dividing wall #1, one tile at a time, with a gap at GATE_GX
   ...Array.from({ length: COLS }, (_, gx) => gx)

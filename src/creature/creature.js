@@ -635,7 +635,30 @@ export function createCritter(world, save) {
     const onIt = canOccupyObject(o) && o.gx <= c.gx && c.gx < o.gx + o.w
       && o.gy <= c.gy && c.gy < o.gy + o.h;
     if (onIt) {
-      const facing = o.def.directional ? (o.type === 'chair' ? o.state.face : o.state.rotation) : o.def.faceDir;
+      // state.face (plain chairs) is defined in world/objects.js as "which
+      // way the seat opens" using this exact 0:+gx 1:+gy 2:-gx 3:-gy scale,
+      // so it drops straight in — confirmed correct.
+      //
+      // state.rotation (kenneyItem sit furniture — armchair, office_chair,
+      // bar_stool, bench) has no such documented guarantee: it only picks
+      // which of the 4 compass-labelled sprite images to show (ROT_FILES in
+      // sprites.js), an independently-authored convention with no promise of
+      // lining up with a critter's own facing scale — critter.js draws this
+      // creature procedurally, with no compass-labelled art of its own to
+      // anchor a comparison against. Reported live as wrong (a chair rotated
+      // to visually face NW sat a critter visually facing SW), but I don't
+      // have a reliable way to independently verify which of the three other
+      // rotation values is actually correct — the creature's round, mostly
+      // symmetric shape makes "which way does it face" hard to judge from a
+      // screenshot even directly, and I tried two derivations (a constant
+      // +1, and a 0/2-fixed 1/3-swap) that disagreed with each other and, on
+      // recheck, with the report itself. Left as a direct pass-through
+      // rather than shipping an unverified guess — needs an actual side by
+      // side (rotate the piece through all 4 states, sit a critter in each,
+      // compare) to pin down the real mapping.
+      const facing = o.def.directional
+        ? (o.type === 'chair' ? o.state.face : o.state.rotation)
+        : o.def.faceDir;
       if (facing != null) { c.dir = facing & 3; return; }
     }
     const cc = world.center(o);

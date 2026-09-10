@@ -67,7 +67,39 @@ const KNOWN_MODELS = [
 const ROT_FILES = ['SE', 'NE', 'NW', 'SW'];
 const ROT_AZIMUTH_DEG = [45, 135, 225, 315]; // camera sits in that compass octant, looking back at the origin
 const PX_PER_UNIT = 240; // export resolution; the game rescales on draw anyway (see drawSprite), this just needs to be crisp
+// The game's fixed grid-to-pixel ratio (TILE_W in iso.js) — NOT a render
+// setting, an object-independent constant. Since this tool's camera is
+// calibrated to the game's exact 2:1 tile ratio, 1 world unit measures 32
+// game px on EITHER axis, for any object, always. That makes it possible to
+// preview a furniture def's `tall` cap exactly: drawSprite() in sprites.js
+// draws with `ctx.drawImage(img, ..., dw, dh)`, and a `tall` below the
+// sprite's natural height doesn't crop — drawImage stretches the WHOLE
+// source into that box — so real furniture in this game is routinely
+// squashed well short of a model's true proportions (chair: tall:10, vs.
+// this game's critter standing about 20px tall — furniture here is
+// typically shorter than the pet, not towering over it, the opposite of
+// what real-world Kenney proportions alone would suggest).
+const GAME_PX_PER_UNIT = 32;
 const MAX_CANVAS = 2048;
+
+// Same 4-direction indexing as RING_DIRS/DIRS in world.js and objects.js —
+// 0:+gx  1:+gy  2:-gx  3:-gy — duplicated locally rather than imported since
+// this is a standalone tool with no build step pulling in the game's own
+// source. Mirrors adjacentCells() in objects.js: an object with a frontDir
+// is only usable from that one side (fridge, bookshelf); one with a backDir
+// is usable from every side but that one (TV); neither means every side
+// works (workbench, plant, lamp, aquarium).
+const RING_DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+const DIR_LABELS = ['+X (east)', '+Z (south)', '−X (west)', '−Z (north)'];
+function validApproachSides() {
+  if (state.approachMode === 'front') return [state.frontDir];
+  if (state.approachMode === 'notback') return [0, 1, 2, 3].filter((d) => d !== state.frontDir);
+  return [0, 1, 2, 3];
+}
+function facingAngle(dirIndex) {
+  const [dx, dz] = RING_DIRS[dirIndex];
+  return Math.atan2(dx, dz);
+}
 
 // ---------------------------------------------------------------------------
 // Calibration: find the camera elevation that makes a flat unit square,
@@ -154,9 +186,44 @@ wrapper.add(modelInner);
 scene.add(wrapper);
 let currentModel = null;
 
-// Footprint ground grid + outline — visual only, excluded from export.
+// Ground plane — a soft, generously-sized floor so there's always an
+// unambiguous "this is Y=0" visual cue no matter how the model/critter are
+// scaled or positioned. Separate from the footprint grid (which only marks
+// the exact declared cell boundaries) and, like everything in this section,
+// excluded from the actual PNG export.
+const groundGroup = new THREE.Group();
+scene.add(groundGroup);
+const groundPlane = new THREE.Mesh(
+  new THREE.CircleGeometry(1, 48),
+  // Lighter than the page's own near-black background on purpose — a
+  // ground plane close in tone to "no ground at all" defeats the entire
+  // point of adding it (confirmed live: 0x232430 at 0.55 opacity was
+  // numerically present, alpha channel and all, but unreadable next to the
+  // page background it was meant to stand out from).
+  new THREE.MeshBasicMaterial({ color: 0x4c5066, transparent: true, opacity: 0.85, side: THREE.DoubleSide }),
+);
+groundPlane.rotation.x = -Math.PI / 2;
+groundPlane.position.y = -0.001; // a hair below everything else so it never z-fights the grid/shadows sitting at y=0
+groundGroup.add(groundPlane);
+
+// Footprint grid + outline — visual only, excluded from export.
 const footprintGroup = new THREE.Group();
 scene.add(footprintGroup);
+
+// A soft dark ellipse directly under something, the same trick
+// src/render/critter.js itself uses (PAL.shadow) — the cheapest, clearest
+// way to read "this is standing ON the floor" regardless of camera angle,
+// and independent of whether the main grid/ground extends that far.
+function makeContactShadow(radiusX, radiusZ, opacity) {
+  const mesh = new THREE.Mesh(
+    new THREE.CircleGeometry(1, 24),
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity }),
+  );
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.scale.set(radiusX, radiusZ, 1);
+  mesh.position.y = 0.001;
+  return mesh;
+}
 
 // Critter scale reference — approximate, and deliberately not chasing false
 // precision: the game has no "vertical grid unit" at all (walls, seat
@@ -167,31 +234,56 @@ scene.add(footprintGroup);
 // draws one rounded blob with ears, not a separate head/body. So: a single
 // sphere, sized empirically against a loaded reference model (a 1x1 chair)
 // rather than derived from an equation that doesn't actually exist.
+//
+// Pose mirrors the real distinction the game itself makes (see
+// canOccupyObject / adjacentCells in src/world/objects.js): chairs, sofas
+// and beds are occupiable — the critter's own footprint cell becomes the
+// destination, so sit/lie sit the reference right on top of the model.
+// Fridges, bookshelves, coffee machines etc. are ring-approached — used by
+// standing in an adjacent cell — so reach/grab plants the critter beside the
+// footprint instead, matching actions.js's goto(approachCells) + use(...,
+// {pose:'reach'}) followed by hold(item) for fetch_food and its siblings.
 const CRITTER_HEIGHT_UNITS = 0.55;
-const CRITTER_SEAT_UNITS = 0.22;
 const critterGroup = new THREE.Group();
+const critterPoseGroup = new THREE.Group(); // blob+ears live here; pose reshapes THIS, not critterGroup itself
+critterGroup.add(critterPoseGroup);
 scene.add(critterGroup);
+let heldItemMesh = null;
 buildCritterReference();
 
 function buildCritterReference() {
-  const mat = new THREE.MeshStandardMaterial({ color: 0xffb86b, roughness: 0.8, transparent: true, opacity: 0.85 });
+  const mat = new THREE.MeshStandardMaterial({ color: 0xffb86b, roughness: 0.8, transparent: true, opacity: 0.9 });
   const h = CRITTER_HEIGHT_UNITS;
+  critterGroup.add(makeContactShadow(h * 0.62, h * 0.46, 0.4));
   const blob = new THREE.Mesh(new THREE.SphereGeometry(h * 0.5, 16, 12), mat);
   blob.scale.set(1, 0.92, 0.96);
   blob.position.y = h * 0.5;
-  critterGroup.add(blob);
+  critterPoseGroup.add(blob);
   for (const side of [-1, 1]) {
     const ear = new THREE.Mesh(new THREE.SphereGeometry(h * 0.14, 8, 6), mat);
     ear.scale.set(0.7, 1.3, 0.6);
     ear.position.set(side * h * 0.3, h * 0.92, -h * 0.05);
-    critterGroup.add(ear);
+    critterPoseGroup.add(ear);
   }
-  const seatLine = new THREE.Mesh(
-    new THREE.BoxGeometry(0.5, 0.012, 0.02),
-    new THREE.MeshBasicMaterial({ color: 0x4a7dff }),
+  // A facing marker — critterPoseGroup.rotation.y (set per pose in
+  // layoutCritterPose) points this at whatever direction the critter is
+  // meant to be looking, so "which way does it face" is something you can
+  // actually see instead of having to trust a dropdown.
+  const nose = new THREE.Mesh(
+    new THREE.ConeGeometry(h * 0.09, h * 0.2, 8),
+    new THREE.MeshStandardMaterial({ color: 0xe8935a, roughness: 0.8 }),
   );
-  seatLine.position.set(0, CRITTER_SEAT_UNITS, h * 0.34);
-  critterGroup.add(seatLine);
+  nose.rotation.x = Math.PI / 2;
+  nose.position.set(0, h * 0.55, h * 0.46);
+  critterPoseGroup.add(nose);
+  // The held item (see c.holding in creature.js: 'raw'/'meal'/'can'/'toy',
+  // drawn above the head) — a plain small box stands in for any of them
+  // here since this is about calibrating a GRAB HEIGHT, not the art.
+  heldItemMesh = new THREE.Mesh(
+    new THREE.BoxGeometry(0.1, 0.09, 0.07),
+    new THREE.MeshStandardMaterial({ color: 0x6f9bb5, roughness: 0.6 }),
+  );
+  critterGroup.add(heldItemMesh);
 }
 
 function layoutFootprint(w, h) {
@@ -213,6 +305,16 @@ function layoutFootprint(w, h) {
   const dot = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff5f5f }));
   dot.userData.isAnchorDot = true;
   footprintGroup.add(dot);
+  // a shadow under the model itself, not just the critter — same grounding
+  // cue, sized to the footprint so it reads as "this piece's own shadow"
+  const modelShadow = new THREE.Mesh(
+    new THREE.CircleGeometry(1, 32),
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28 }),
+  );
+  modelShadow.rotation.x = -Math.PI / 2;
+  modelShadow.scale.set(w * 0.47, h * 0.47, 1);
+  modelShadow.position.set(w / 2, 0.0015, h / 2);
+  footprintGroup.add(modelShadow);
 }
 
 // ---------------------------------------------------------------------------
@@ -222,10 +324,25 @@ const state = {
   rotation: 0, // index into ROT_FILES
   fpW: 1, fpH: 1,
   scale: 1, offx: 0, offy: 0, offz: 0,
-  margin: 0.06,
+  margin: 0.06, zoom: 1,
+  tallCap: 0, // px, 0 = uncapped; mirrors the furniture def's own `tall` field
   showGrid: true, showCritter: true,
   freelook: false,
   exportName: '',
+  // 'stand' next to the piece (pure scale reference, the original behaviour)
+  // vs 'sit'/'lie' (on top of it — occupiable furniture) vs 'reach' (beside
+  // it, holding an item — ring-approached furniture). See the comment above
+  // buildCritterReference() for why these two placements differ.
+  critterPose: 'stand',
+  poseHeight: { sit: 0.24, lie: 0.09, reach: 0.32 },
+  // Which side(s) of the footprint this piece can actually be used from —
+  // 'all' (workbench/plant/lamp/aquarium), 'front' (fridge/bookshelf, only
+  // frontDir), 'notback' (TV, every side but backDir). frontDir doubles as
+  // the sit-facing direction (which way the critter looks once seated) since
+  // sitting has no approach side of its own to speak of.
+  approachMode: 'all',
+  frontDir: 1,
+  reachSide: 1,
 };
 
 function currentAzimuthRad() {
@@ -254,6 +371,74 @@ function boxCorners(box) {
   ].map(([x, y, z]) => new THREE.Vector3(x, y, z));
 }
 
+/** Shapes and places the critter reference for the selected pose. Sit/lie
+ *  sit it on top of the footprint (occupiable furniture — chairs, sofas,
+ *  beds); reach/grab stands it beside the footprint holding an item
+ *  (ring-approached furniture — fridges, bookshelves, coffee machines); the
+ *  default stand keeps the original beside-the-piece scale reference. */
+function layoutCritterPose(fpW, fpH) {
+  const h = CRITTER_HEIGHT_UNITS;
+  critterPoseGroup.rotation.set(0, 0, 0);
+  critterPoseGroup.scale.set(1, 1, 1);
+  critterPoseGroup.position.set(0, 0, 0);
+  heldItemMesh.visible = false;
+
+  if (state.critterPose === 'sit') {
+    const seatY = state.poseHeight.sit;
+    critterPoseGroup.scale.set(1.08, 0.62, 1.05); // squashed down onto the seat, same idea as pose==='sit' in critter.js
+    critterPoseGroup.rotation.y = facingAngle(state.frontDir); // faces the piece's own open/front side, same as a chair's state.face
+    critterGroup.position.set(fpW / 2, seatY, fpH / 2);
+  } else if (state.critterPose === 'lie') {
+    const lieY = state.poseHeight.lie;
+    critterPoseGroup.rotation.z = Math.PI / 2; // on its side
+    critterPoseGroup.scale.set(0.62, 1.35, 1.05);
+    critterGroup.position.set(fpW / 2, lieY + h * 0.28, fpH / 2);
+  } else if (state.critterPose === 'reach') {
+    // Only stand somewhere this piece can actually be used from — a fridge
+    // with approachMode 'front' has exactly one valid side (its frontDir);
+    // reachSide is clamped into whatever's valid every time this runs, so
+    // switching mode/frontDir can never leave the preview parked on a side
+    // the real game would never route a critter to (the back of a fridge).
+    const valid = validApproachSides();
+    if (!valid.includes(state.reachSide)) state.reachSide = valid[0];
+    const [dx, dz] = RING_DIRS[state.reachSide];
+    const gap = 0.32;
+    const px = dx !== 0 ? (dx > 0 ? fpW + gap : -gap) : fpW / 2;
+    const pz = dz !== 0 ? (dz > 0 ? fpH + gap : -gap) : fpH / 2;
+    critterGroup.position.set(px, 0, pz);
+    critterPoseGroup.rotation.y = facingAngle((state.reachSide + 2) & 3); // faces back toward the piece it's standing beside
+    heldItemMesh.visible = true;
+    heldItemMesh.position.set(-dx * 0.22, state.poseHeight.reach, -dz * 0.22); // toward the object from wherever the critter's standing
+  } else {
+    critterGroup.position.set(fpW / 2, 0, fpH + 0.32); // just past the footprint's far edge, for scale comparison
+  }
+}
+
+/** Mirrors the game's own `tall` cap exactly: drawSprite() in sprites.js
+ *  stretches the WHOLE image into a shorter box when the natural height
+ *  exceeds `tall` (ctx.drawImage with an explicit dh squashes, it doesn't
+ *  crop) — so a furniture def's tall value routinely renders real-proportioned
+ *  Kenney models much shorter in-game than the raw model actually is. Applying
+ *  that same squash here is what makes this tool's preview actually predict
+ *  the in-game result instead of just showing the model's real-world
+ *  proportions next to the critter.
+ *
+ *  Preview only, deliberately — never called before the frustum is fixed for
+ *  this layout(), and always undone before an actual export capture. The
+ *  exported PNG has to keep the model's true unsquashed proportions: the
+ *  squash belongs to whatever `tall` the furniture def ends up with in-game,
+ *  applied fresh by sprites.js at draw time, not baked in twice. Returns the
+ *  natural (pre-squash) height in game px, for the calibration readout. */
+function applyTallCapSquash() {
+  if (!currentModel) return 0;
+  const box = new THREE.Box3().setFromObject(wrapper);
+  const naturalPx = (box.max.y - box.min.y) * GAME_PX_PER_UNIT;
+  if (state.tallCap && naturalPx > state.tallCap && naturalPx > 0) {
+    wrapper.scale.y *= state.tallCap / naturalPx;
+  }
+  return naturalPx;
+}
+
 /** Recompute wrapper transform + camera frustum for the current state. Runs
  *  on every control change and every rotation switch — cheap enough. */
 function layout() {
@@ -262,8 +447,12 @@ function layout() {
   wrapper.position.set(fpW / 2 + state.offx, state.offy, fpH / 2 + state.offz);
   layoutFootprint(fpW, fpH);
   footprintGroup.visible = state.showGrid;
+  groundGroup.visible = state.showGrid;
+  const groundR = Math.max(fpW, fpH) * 3 + 3;
+  groundPlane.scale.set(groundR, groundR, 1);
+  groundPlane.position.set(fpW / 2, -0.001, fpH / 2);
   critterGroup.visible = state.showCritter;
-  critterGroup.position.set(fpW / 2, 0, fpH + 0.6); // just past the footprint's far edge, for scale comparison
+  layoutCritterPose(fpW, fpH);
   // matrixWorld only auto-updates during render, one step behind the
   // transforms just set above — force it now so the Box3 measurements below
   // (which drive the camera frustum) see this call's values, not last call's.
@@ -285,13 +474,28 @@ function layout() {
   const dot = footprintGroup.children.find((c) => c.userData.isAnchorDot);
   if (dot) dot.position.copy(anchorCorner);
 
+  // Only the footprint + the actual model decide the frustum — this is what
+  // ends up in the export, so it's what "correctly framed" has to mean. The
+  // 'stand'/'reach' critter deliberately sits OUTSIDE the footprint, off to
+  // one side (so it reads as a separate thing standing next to the piece,
+  // not part of it), which used to blow the frustum wide open: forcing it
+  // symmetric around the footprint's own center turned one lopsided extra
+  // object into wasted space on both sides at once. It stays excluded here
+  // for exactly that reason — a preview-only aid clipping slightly at
+  // extreme zoom is a fair trade for the export never being at the mercy of
+  // where a reference prop happens to stand. 'sit'/'lie', though, place it
+  // dead center ON the footprint (that's the whole point — checking it
+  // against the piece), so including them can only make the view taller,
+  // never lopsided, and doing so keeps a tall sit/lie pose from clipping.
   const extentPts = [...footCorners];
   let modelBox = null;
   if (currentModel) {
     modelBox = new THREE.Box3().setFromObject(wrapper);
     extentPts.push(...boxCorners(modelBox));
   }
-  if (state.showCritter) extentPts.push(...boxCorners(new THREE.Box3().setFromObject(critterGroup)));
+  if (state.showCritter && (state.critterPose === 'sit' || state.critterPose === 'lie')) {
+    extentPts.push(...boxCorners(new THREE.Box3().setFromObject(critterGroup)));
+  }
 
   let topY = -Infinity, minX = Infinity, maxX = -Infinity;
   for (const p of extentPts) {
@@ -300,13 +504,14 @@ function layout() {
     if (x < minX) minX = x;
     if (x > maxX) maxX = x;
   }
-  const span = Math.max(topY - anchorY, 0.05);
-  const halfW = Math.max(maxX - anchorX, anchorX - minX, 0.05) * (1 + state.margin);
+  const zoom = state.zoom || 1;
+  const span = Math.max(topY - anchorY, 0.05) * (1 + state.margin) / zoom;
+  const halfW = Math.max(maxX - anchorX, anchorX - minX, 0.05) * (1 + state.margin) / zoom;
 
   isoCamera.left = anchorX - halfW;
   isoCamera.right = anchorX + halfW;
   isoCamera.bottom = anchorY; // exact — this is the sprite's ground-contact edge, no padding
-  isoCamera.top = anchorY + span * (1 + state.margin);
+  isoCamera.top = anchorY + span;
   isoCamera.updateProjectionMatrix();
 
   const w = Math.min(MAX_CANVAS, Math.max(8, Math.round((isoCamera.right - isoCamera.left) * PX_PER_UNIT)));
@@ -326,8 +531,16 @@ function layout() {
   if (modelBox && modelBox.min.y < -0.01) {
     warning = ' ⚠ model sits below the floor — raise vertical offset or check scale.';
   }
+  // Applied last, after every frustum/canvas-size measurement above is
+  // already locked in from the model's TRUE bounds — see applyTallCapSquash().
+  const naturalPx = applyTallCapSquash();
+  const tallInfo = currentModel
+    ? state.tallCap
+      ? ` · natural ${Math.round(naturalPx)}px → tall:${state.tallCap} squashes to ${Math.round(Math.min(naturalPx, state.tallCap))}px`
+      : ` · natural height ${Math.round(naturalPx)}px uncapped (game furniture is typically tall:10-30)`
+    : '';
   document.getElementById('calib-readout').textContent =
-    `elevation ${ELEVATION_DEG.toFixed(2)}° · azimuth ${(currentAzimuthRad() * 180 / Math.PI).toFixed(0)}° · ${w}×${h}px${warning}`;
+    `elevation ${ELEVATION_DEG.toFixed(2)}° · azimuth ${(currentAzimuthRad() * 180 / Math.PI).toFixed(0)}° · ${w}×${h}px${warning}${tallInfo}`;
 
   renderFrame();
 }
@@ -385,6 +598,7 @@ function onModelLoaded(gltf, name) {
   currentModel = scene3d;
   document.getElementById('export-name').value = name;
   state.exportName = name;
+  state.tallCap = 0; $('tallcap').value = 0; $('v-tallcap').textContent = 'off'; // a cap tuned for the last model means nothing for this one
   applyAutoFit(); // Kenney's models come in at real-world meter scale, not grid-cell scale — almost never near 1:1 with the declared footprint, so start from a fit rather than leaving the model tiny/huge by default.
   updateReferencePane();
   layout();
@@ -412,6 +626,29 @@ function applyAutoFit() {
   $('scale').value = state.scale; $('v-scale').textContent = state.scale.toFixed(2);
   $('offx').value = 0; $('offy').value = 0; $('offz').value = 0;
   $('v-offx').textContent = '0.00'; $('v-offy').textContent = '0.00'; $('v-offz').textContent = '0.00';
+  resetPoseHeightsToModel(rawSize.y * state.scale);
+}
+
+/** A fixed default seat/lie/grab height is wrong as often as it's right —
+ *  a bar stool and a bed are both "furniture," off by 5x in height. Rescale
+ *  the three pose heights against THIS model's own fitted height so the
+ *  critter starts out roughly at the right level instead of buried inside
+ *  a tall piece or floating over a short one (confirmed live: a bed ~0.67
+ *  units tall left the fixed 0.09 lie-height completely hidden inside the
+ *  mattress). Runs on every load/re-fit, so it always tracks the current
+ *  model — hand-tuned values only survive within that same model's session. */
+function resetPoseHeightsToModel(fittedHeight) {
+  const h = Math.max(0.02, fittedHeight || 0.3);
+  state.poseHeight.sit = +(h * 0.42).toFixed(2);
+  state.poseHeight.lie = +(h * 0.8).toFixed(2);
+  state.poseHeight.reach = +(h * 0.55).toFixed(2);
+  const info = POSE_INFO[state.critterPose];
+  if (info?.height) {
+    const slider = $('pose-height');
+    slider.max = Math.max(1, h * 1.3).toFixed(2);
+    slider.value = state.poseHeight[info.height.key];
+    $('v-pose-height').textContent = state.poseHeight[info.height.key].toFixed(2);
+  }
 }
 
 function loadFromFile(file) {
@@ -437,19 +674,32 @@ function setStatus(msg, isErr = false) {
   el.className = isErr ? 'err' : '';
 }
 
-// known-model select
-const knownSelect = $('known-model');
+// known-model search box (a datalist-backed <input>, not a 140-item <select>
+// no one wants to scroll — type-to-filter is native, no JS filtering needed)
+const knownInput = $('known-model');
+const knownList = $('known-model-list');
 for (const name of KNOWN_MODELS) {
   const opt = document.createElement('option');
-  opt.value = name; opt.textContent = name;
-  knownSelect.appendChild(opt);
+  opt.value = name;
+  knownList.appendChild(opt);
 }
-knownSelect.value = 'chair';
-$('load-known').addEventListener('click', () => {
-  const name = knownSelect.value;
+knownInput.value = 'chair';
+
+function loadTypedKnownModel() {
+  const typed = knownInput.value.trim();
+  const name = KNOWN_MODELS.includes(typed)
+    ? typed
+    : KNOWN_MODELS.find((n) => n.toLowerCase() === typed.toLowerCase());
+  if (!name) {
+    setStatus(`"${typed}" isn't one of the bundled Kenney models — pick a suggestion from the list, or drag in your own .glb instead`, true);
+    return;
+  }
+  knownInput.value = name;
   const url = `/assets/kenney-furniture-kit/extracted/Models/${encodeURIComponent('GLTF format')}/${encodeURIComponent(name)}.glb`;
   loadFromUrl(url, name);
-});
+}
+$('load-known').addEventListener('click', loadTypedKnownModel);
+knownInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadTypedKnownModel(); });
 
 // file input + drag/drop
 $('file-input').addEventListener('change', (e) => {
@@ -488,6 +738,8 @@ bindSlider('scale', 'scale', 'v-scale');
 bindSlider('offx', 'offx', 'v-offx');
 bindSlider('offz', 'offz', 'v-offz');
 bindSlider('offy', 'offy', 'v-offy');
+bindSlider('tallcap', 'tallCap', 'v-tallcap', (v) => (v > 0 ? `${v}px` : 'off'));
+bindSlider('zoom', 'zoom', 'v-zoom', (v) => `${v.toFixed(2)}×`);
 // margin slider is authored 0-30 (percent); state.margin wants a 0-0.3 fraction
 $('margin').value = state.margin * 100;
 $('margin').addEventListener('input', (e) => {
@@ -500,6 +752,103 @@ $('auto-center').addEventListener('click', () => { applyAutoFit(); layout(); });
 
 $('show-grid').addEventListener('change', (e) => { state.showGrid = e.target.checked; layout(); });
 $('show-critter').addEventListener('change', (e) => { state.showCritter = e.target.checked; layout(); });
+
+// Critter pose — see layoutCritterPose() for what each one actually does.
+const POSE_INFO = {
+  stand: { explainer: "Beside the piece — same as the scale reference, just named for what it's checking.", height: null },
+  sit: {
+    explainer: 'On top of the footprint, like a chair/sofa (an occupiable piece — the game targets the cell itself, not a ring around it). Dial the height to match the model\'s actual seat, then use that value for seatH on the furniture def.',
+    height: { key: 'sit', label: 'Seat height', min: 0, max: 1 },
+  },
+  lie: {
+    explainer: "On top of the footprint, like a bed. Dial the height to match the mattress top.",
+    height: { key: 'lie', label: 'Lie height', min: 0, max: 0.6 },
+  },
+  reach: {
+    explainer: "Beside the footprint, like a fridge/bookshelf/coffee machine (ring-approached — goto(approachCells) then use(...,{pose:'reach'}) in actions.js). The small block is the held item (c.holding in creature.js) — dial its height to where a grabbed item should appear.",
+    height: { key: 'reach', label: 'Grab height', min: 0, max: 1 },
+  },
+};
+function setCritterPose(pose) {
+  state.critterPose = pose;
+  for (const btn of $('pose-buttons').children) btn.classList.toggle('active', btn.dataset.pose === pose);
+  const info = POSE_INFO[pose];
+  $('pose-explainer').textContent = info.explainer;
+  const heightRow = $('pose-height-row');
+  if (info.height) {
+    heightRow.hidden = false;
+    $('pose-height-label').textContent = info.height.label;
+    $('pose-height').min = info.height.min;
+    $('pose-height').max = info.height.max;
+    $('pose-height').value = state.poseHeight[info.height.key];
+    $('v-pose-height').textContent = state.poseHeight[info.height.key].toFixed(2);
+  } else {
+    heightRow.hidden = true;
+  }
+  refreshApproachUI();
+  layout();
+}
+for (const btn of $('pose-buttons').children) {
+  btn.addEventListener('click', () => setCritterPose(btn.dataset.pose));
+}
+$('pose-height').addEventListener('input', (e) => {
+  const key = POSE_INFO[state.critterPose].height.key;
+  state.poseHeight[key] = Number(e.target.value);
+  $('v-pose-height').textContent = state.poseHeight[key].toFixed(2);
+  layout();
+});
+
+// Approach direction — which side(s) this piece can be used from, and (for
+// reach/grab) which of those valid sides is currently being previewed. See
+// validApproachSides()/RING_DIRS above: this mirrors frontDir/backDir on the
+// actual furniture def, not a UI convenience invented for this tool alone.
+const APPROACH_HINTS = {
+  all: 'Matches adjacentCells() in objects.js: no frontDir/backDir on the def means every side works — workbench, plant, lamp, aquarium.',
+  front: "Matches a def with frontDir set: usable from exactly one side — fridge (door swings toward the room), bookshelf, a stand-and-use toilet. The back is never valid, on purpose.",
+  notback: 'Matches a def with backDir set: usable from every side except one — TV (any side but behind the screen).',
+};
+function refreshApproachUI() {
+  const dirButtons = $('frontdir-buttons');
+  dirButtons.style.opacity = state.approachMode === 'all' ? 0.4 : 1;
+  for (const btn of dirButtons.children) btn.disabled = state.approachMode === 'all';
+  $('approach-hint').textContent = APPROACH_HINTS[state.approachMode];
+
+  const reachRow = $('reach-side-row');
+  if (state.critterPose === 'reach') {
+    reachRow.hidden = false;
+    const valid = validApproachSides();
+    if (!valid.includes(state.reachSide)) state.reachSide = valid[0];
+    $('reach-side-label').textContent =
+      `${DIR_LABELS[state.reachSide]}${valid.length < 4 ? ` (${valid.length}/4 sides valid)` : ''}`;
+  } else {
+    reachRow.hidden = true;
+  }
+}
+for (const btn of $('approach-mode-buttons').children) {
+  btn.addEventListener('click', () => {
+    state.approachMode = btn.dataset.mode;
+    for (const b of $('approach-mode-buttons').children) b.classList.toggle('active', b === btn);
+    refreshApproachUI();
+    layout();
+  });
+}
+for (const btn of $('frontdir-buttons').children) {
+  btn.addEventListener('click', () => {
+    state.frontDir = Number(btn.dataset.dir);
+    for (const b of $('frontdir-buttons').children) b.classList.toggle('active', b === btn);
+    refreshApproachUI();
+    layout();
+  });
+}
+function cycleReachSide(delta) {
+  const valid = validApproachSides();
+  const i = valid.indexOf(state.reachSide);
+  state.reachSide = valid[(i + delta + valid.length) % valid.length];
+  refreshApproachUI();
+  layout();
+}
+$('reach-side-prev').addEventListener('click', () => cycleReachSide(-1));
+$('reach-side-next').addEventListener('click', () => cycleReachSide(1));
 $('freelook').addEventListener('change', (e) => {
   state.freelook = e.target.checked;
   orbit.enabled = state.freelook;
@@ -584,16 +933,22 @@ function download(blob, filename) {
 }
 
 function captureCurrentRotation() {
-  const prevGrid = footprintGroup.visible, prevCritter = critterGroup.visible, prevFree = state.freelook;
+  const prevGrid = footprintGroup.visible, prevGround = groundGroup.visible,
+    prevCritter = critterGroup.visible, prevFree = state.freelook;
+  const prevScaleY = wrapper.scale.y; // undo any tall-cap preview squash — never export it, see applyTallCapSquash()
   footprintGroup.visible = false;
+  groundGroup.visible = false;
   critterGroup.visible = false;
   state.freelook = false;
+  wrapper.scale.y = state.scale;
   renderFrame();
   return new Promise((resolve) => {
     renderer.domElement.toBlob((blob) => {
       footprintGroup.visible = prevGrid;
+      groundGroup.visible = prevGround;
       critterGroup.visible = prevCritter;
       state.freelook = prevFree;
+      wrapper.scale.y = prevScaleY;
       renderFrame();
       resolve(blob);
     }, 'image/png');
@@ -629,7 +984,8 @@ layout();
 
 // console debug hook — inspect live scene state while iterating on this tool
 window.spriteForge = {
-  scene, wrapper, footprintGroup, critterGroup, isoCamera, state, THREE, renderer,
-  renderFrame, layout, captureCurrentRotation,
+  scene, wrapper, footprintGroup, groundGroup, critterGroup, critterPoseGroup, heldItemMesh,
+  isoCamera, state, THREE, renderer, renderFrame, layout, captureCurrentRotation, setCritterPose,
+  validApproachSides, cycleReachSide, applyTallCapSquash,
 };
 })();

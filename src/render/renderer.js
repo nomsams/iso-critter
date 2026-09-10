@@ -491,10 +491,11 @@ export function createRenderer(canvas, world) {
     // displacement in the painter even after the sprite anchor was fixed.
     const [rx, ry] = rot(c.px, c.py);
     const scale = c.stage?.scale ?? 1;
-    // Mirrors drawCritter's neutral ground contact: body origin + foot centre
-    // + foot radius. Deliberately exclude walk bob/breathing so the layer does
-    // not flicker on every animation frame.
-    const footPixels = 8 + 10.5 * scale * 0.52 + 1.7 * scale;
+    // Mirrors drawCritter's neutral ground contact: body origin (now the
+    // tile's true centre — see the FEET_DROP correction in critter.js) plus
+    // the foot radius past it. Deliberately exclude walk bob/breathing so the
+    // layer does not flicker on every animation frame.
+    const footPixels = 8 + 1.7 * scale;
     return rx + ry + footPixels / HH + 0.01; // living subject wins exact ties
   }
 
@@ -694,11 +695,33 @@ export function createRenderer(canvas, world) {
         ctx.fillText(isActive ? 'C' : `C${cr.id}`, sx(cr.gx + 0.5, cr.gy + 0.5), sy(cr.gx + 0.5, cr.gy + 0.5) + 5);
       }
 
-      if (active && !active.away) {
-        ctx.beginPath();
-        ctx.arc(sx(active.px + 0.5, active.py + 0.5), sy(active.px + 0.5, active.py + 0.5), 2.2, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(71,220,255,1)';
-        ctx.fill();
+      // Three reference points per critter, so a foot/cell mismatch shows up
+      // directly instead of needing to eyeball it: red is the tile's own true
+      // centre (independent of the critter entirely — sx/sy(px,py)+HH, same
+      // as the tile diamonds above); green is drawCritter's body-origin
+      // anchor; blue is that body's own feet. Green and blue coinciding with
+      // red is the FEET_DROP fix in critter.js doing its job — the point of
+      // this overlay is to make that checkable at a glance, live, rather
+      // than asserted from code alone.
+      const dot = (px, py, color) => {
+        ctx.beginPath(); ctx.arc(px, py, 2, 0, Math.PI * 2);
+        ctx.fillStyle = color; ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 0.6; ctx.stroke();
+      };
+      for (const cr of critters) {
+        if (cr.away) continue;
+        const s = cr.stage.scale;
+        let lift = 0, squash = 1;
+        if (cr.pose === 'walk') { const wp = Math.sin(cr.bob); lift = Math.abs(wp) * 1.6; squash = 1 + wp * 0.03; }
+        if (cr.pose === 'sit' || cr.pose === 'read') { lift = -3; squash = 0.86; }
+        if (cr.pose === 'lie') { lift = -5; squash = 0.62; }
+        const anchorX = sx(cr.px, cr.py), anchorY = sy(cr.px, cr.py);
+        const cellCenterY = anchorY + HH; // true tile centre, per tilePath's own geometry above
+        const bodyY = anchorY + 8 - 10.5 * s * 0.52 - lift; // drawCritter's (bx,by) post-fix (breathe omitted, sub-pixel)
+        const feetY = bodyY + 10.5 * s * squash * 0.52;
+        dot(anchorX, cellCenterY, '#ff2d55');
+        dot(anchorX, bodyY, '#39ff14');
+        dot(anchorX, feetY, '#2d8bff');
       }
       ctx.restore();
     }
