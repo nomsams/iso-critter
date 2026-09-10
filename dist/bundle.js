@@ -598,8 +598,14 @@ const DEFS = {
   },
 
   chair: {
-    label: 'chair', w: 1, h: 1, tall: 10, solid: false, sit: true, seatH: 6,
-    seatX: 0.5, seatY: 0.5,
+    // seatH/Y from sprite-forge's Auto-detect against the real chairRounded
+    // model — as a proportion of that session's own measured height,
+    // reapplied to the shipped chairRounded_SE.png's real dimensions, not
+    // the tool's raw readout; see the longer version of this note above
+    // the kenneyItem furniture below, it applies here too. Renders fully
+    // uncapped in-game (no `tall` reaches drawSprite() below).
+    label: 'chair', w: 1, h: 1, tall: 10, solid: false, sit: true, seatH: 19,
+    seatX: 0.5, seatY: 0.57,
     rotatable: true, directional: true,
     acts: ['lounge'],
     // state.face is which way the seat opens: 0=+gx 1=+gy(default) 2=-gx 3=-gy.
@@ -672,8 +678,16 @@ const DEFS = {
   },
 
   bed: {
-    label: 'bed', w: 2, h: 2, tall: 15, solid: false, sit: true, lie: true, seatH: 6,
-    seatX: 0.5, seatY: 0.5,
+    // Measured lying down (the primary use — sit/lie share one anchor, see
+    // the shared-anchor note in creature.js's faceObject). seatH is the
+    // tool's measured proportion re-applied to 34 — the real, capped
+    // on-screen height (bedDouble's own drawSprite() call below passes
+    // tall:34, and its natural height exceeds that) — not the model's
+    // full unsquashed proportions the tool itself measures; see the longer
+    // note above the kenneyItem furniture below for why that distinction
+    // matters here.
+    label: 'bed', w: 2, h: 2, tall: 15, solid: false, sit: true, lie: true, seatH: 22,
+    seatX: 0.5, seatY: 0.67,
     rotatable: true, directional: true,
     acts: ['sleep'],
     draw(ctx, x, y, o) {
@@ -688,8 +702,8 @@ const DEFS = {
   },
 
   sofa: {
-    label: 'sofa', w: 1, h: 2, tall: 20, solid: false, sit: true, seatH: 8,
-    seatX: 0.5, seatY: 0.5,
+    label: 'sofa', w: 1, h: 2, tall: 20, solid: false, sit: true, seatH: 17,
+    seatX: 0.5, seatY: 0.52,
     rotatable: true, directional: true, rotatesFootprint: true,
     acts: ['lounge'],
     draw(ctx, x, y, o) {
@@ -1096,7 +1110,11 @@ const DEFS = {
 
   bathtub: {
     label: 'bathtub', w: 1, h: 2, tall: 12, solid: false, sit: true, seatH: 4,
-    seatX: 0.5, seatY: 0.5,
+    // The water plate below is drawn 0.82x1.7 centered on (x,y) directly —
+    // i.e. it isn't quite centered on the full 1x2 footprint (0.82/1=0.41,
+    // 1.7/2=0.85÷2=0.425) — so match that rather than the footprint's own
+    // geometric center.
+    seatX: 0.41, seatY: 0.425,
     acts: ['soak'],
     draw(ctx, x, y, o, t) {
       isoBox(ctx, x, y, 1, 2, 10, PAL.whiteS, PAL.white, PAL.whiteD);
@@ -1198,11 +1216,27 @@ const DEFS = {
   // the same object contract as the hand-drawn catalog, so selection,
   // movement, collision, saving and the critter's existing affordances all
   // work without a parallel "asset furniture" system.
+  // seatX/Y/H below are measured, not guessed — sprite-forge's Auto-detect
+  // raycasts the real loaded model (see tools/sprite-forge/main.js) — but
+  // NOT as a direct pixel readout. The tool's own "natural height" for a
+  // given model doesn't necessarily match how tall that model's ALREADY-
+  // EXPORTED sprite actually renders in-game (caught live: stoolBar's seat
+  // came back at the model's full measured height, which put a test critter
+  // floating a full tile above the real, already-shipped sprite — the two
+  // heights disagreed by 30%+). What IS reliable is the *proportion* —
+  // seatH as a fraction of that same session's natural height — since both
+  // numbers move together under whatever's causing the mismatch. Each
+  // value below is that fraction re-applied to the shipped PNG's real
+  // height (naturalHeight/naturalWidth of the actual assets/sprites/*_SE.png,
+  // times (w+h)*16*scale, times ANGLE_CORRECTION from sprites.js — i.e. the
+  // exact math drawSprite() itself uses), not the tool's own readout.
+  // seatX/Y aren't affected — they're plain fractions of the known,
+  // fixed footprint size, with nothing analogous to recalibrate.
   armchair: kenneyItem('armchair', 'loungeChairRelax', {
-    tall: 24, solid: false, sit: true, seatH: 7, acts: ['lounge'],
+    tall: 24, solid: false, sit: true, seatH: 10, seatY: 0.46, acts: ['lounge'],
   }),
   bench: kenneyItem('cushioned bench', 'benchCushion', {
-    w: 2, h: 1, tall: 20, solid: false, sit: true, seatH: 7, acts: ['lounge'],
+    w: 2, h: 1, tall: 20, solid: false, sit: true, seatH: 27, seatY: 0.57, acts: ['lounge'],
   }),
   coffee_table: kenneyItem('coffee table', 'tableCoffee', {
     w: 2, h: 1, tall: 20, surface: true, acts: ['eat_at'],
@@ -1211,7 +1245,7 @@ const DEFS = {
     w: 2, h: 1, tall: 24, surface: true,
   }),
   office_chair: kenneyItem('desk chair', 'chairDesk', {
-    tall: 23, solid: false, sit: true, seatH: 7, acts: ['lounge'],
+    tall: 23, solid: false, sit: true, seatH: 12, seatY: 0.57, acts: ['lounge'],
     // Kenney's 5-star caster base is modeled a little wider than the rest
     // of the chair, so at a plain 1-tile width it splays past the tile's
     // own edges. Trimmed down as a whole (not just the base) so nothing
@@ -1231,7 +1265,7 @@ const DEFS = {
     tall: 16,
   }),
   bar_stool: kenneyItem('bar stool', 'stoolBar', {
-    tall: 20, solid: false, sit: true, seatH: 10, acts: ['lounge'],
+    tall: 20, solid: false, sit: true, seatH: 40, acts: ['lounge'],
   }),
   storage_cabinet: kenneyItem('storage cabinet', 'bookcaseClosedDoors', {
     tall: 31, blocksSight: true,
