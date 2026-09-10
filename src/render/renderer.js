@@ -475,10 +475,12 @@ export function createRenderer(canvas, world) {
     // preferable to the old result where the sofa painted over the critter.
     if (critters) {
       for (const c of critters) {
-        if (c.gx < o.gx || c.gx >= o.gx + o.w || c.gy < o.gy || c.gy >= o.gy + o.h) continue;
-        const activelyUsing = c.task?.cmd?.t === 'use' && c.task.cmd.obj === o;
-        const occupiable = o.def.occupiable || o.def.sit || o.def.lie;
-        if (!c.moving && (activelyUsing || occupiable)) depth = Math.min(depth, depthOfCritter(c) - 0.01);
+        const onCell = c.gx >= o.gx && c.gx < o.gx + o.w && c.gy >= o.gy && c.gy < o.gy + o.h;
+        if (onCell) {
+          const activelyUsing = c.task?.cmd?.t === 'use' && c.task.cmd.obj === o;
+          const occupiable = o.def.occupiable || o.def.sit || o.def.lie;
+          if (!c.moving && (activelyUsing || occupiable)) depth = Math.min(depth, depthOfCritter(c) - 0.01);
+        }
         // Thin wall fragments have the opposite situation from sit furniture:
         // their own filing cell is normal floor (see the wall_seg comment
         // below), so a critter regularly walks straight through it — and for
@@ -488,9 +490,20 @@ export function createRenderer(canvas, world) {
         // blending, so right at that one crossing px, a full sprite-width
         // swap in either direction is visible as a pop — reported live as
         // the wall briefly rendering in front of a critter walking along it.
-        // Pinning the whole cell to "critter's in it, wall stays behind"
-        // removes the crossover rather than just relocating it.
-        if (o.def.edgeBlock) depth = Math.min(depth, depthOfCritter(c) - 0.01);
+        // A same-CELL gate (onCell above) fixed the crossing in the middle
+        // of the wall's own tile, but not the approach: the critter's
+        // sprite has real pixel width, wide enough to visually reach the
+        // next segment along the wall before its rounded grid cell has
+        // actually caught up (confirmed live by sweeping a continuous
+        // position across a whole row and diffing depth against every
+        // segment within reach, not just the exact cell match) — which
+        // read as the same pop, just at each segment's leading edge instead
+        // of its middle. Checking continuous position within a full tile,
+        // not the rounded cell, covers the segment being approached or just
+        // departed as well as the one currently stood on.
+        if (o.def.edgeBlock && Math.abs(c.px - o.gx) < 1 && Math.abs(c.py - o.gy) < 1) {
+          depth = Math.min(depth, depthOfCritter(c) - 0.01);
+        }
       }
     }
     return depth;

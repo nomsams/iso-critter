@@ -4210,6 +4210,12 @@ function createCritter(world, save) {
     bob: 0,
     thinkT: 0,
     stuck: 0,
+    // A goto that can't find any path at all pauses the critter here instead
+    // of immediately trying something else (see enterStuckWait/escapeStuck)
+    // — stuckWaitT counts down a real 10s standstill, stuckAnchor is where
+    // it was when the current stuck streak started, stuckRounds is how many
+    // of those 10s waits have elapsed with it still exactly there.
+    stuckWaitT: 0, stuckRounds: 0, stuckAnchor: null,
     away: save?.away ?? false, awayTimer: save?.awayTimer ?? 0,   // out exploring beyond the door
     visitor: !!save?.visitor,   // a passing-through critter, not part of the household — never saved
   };
@@ -4406,11 +4412,11 @@ function createCritter(world, save) {
           // still refusing to finish on top of one.
           const free = cmd.cells.filter(([x, y]) => !avoid.has(x + ',' + y));
           if (!free.length) {
-            T.lastResult = false; T.cmd = null; T.gotoFailed = true; T.fails = (T.fails || 0) + 1;
-            c.stuck++;
-            if (tryEscapeIfStuck()) { finishTask(); return; }
-            if (T.fails > 2) { c.think('someone else is there.'); finishTask(); return; }
-            continue;
+            T.lastResult = false; T.cmd = null; T.gotoFailed = true;
+            c.think('someone else is there.');
+            enterStuckWait();
+            finishTask();
+            return;
           }
           T.path = findPath(world, [c.gx, c.gy], free, avoid, world._noTransit, T.blockedSteps)
             || findPath(world, [c.gx, c.gy], free, null, world._noTransit, T.blockedSteps);
@@ -4418,18 +4424,18 @@ function createCritter(world, save) {
           T.segmentFacing = -1;
           T.pathFrom = [c.gx, c.gy];
           if (!T.path) {
-            // Unreachable. Hand `false` back so the action can bail gracefully;
-            // give up entirely if it keeps asking for places it cannot get to.
-            T.lastResult = false; T.cmd = null; T.gotoFailed = true; T.fails = (T.fails || 0) + 1;
-            c.stuck++;
-            if (tryEscapeIfStuck()) { finishTask(); return; }
-            if (T.fails > 2) {
-              c.emotion.pulse(-0.3, 0.45, 'could not get there');
-              c.think("can't get to it.");
-              finishTask();
-              return;
-            }
-            continue;
+            // Unreachable. Stand down for a real 10s (enterStuckWait) rather
+            // than immediately becoming eligible to try something else —
+            // most actions don't check this false before yielding straight
+            // into their next step regardless, so without an actual pause
+            // this and a handful of near-identical goals it also can't
+            // reach cycle in well under a second, forever.
+            T.lastResult = false; T.cmd = null; T.gotoFailed = true;
+            c.emotion.pulse(-0.3, 0.45, 'could not get there');
+            c.think("can't get to it.");
+            enterStuckWait();
+            finishTask();
+            return;
           }
         }
         if (!walkStep(dt)) return;             // still walking; wait for next tick
@@ -4586,6 +4592,9 @@ function createCritter(world, save) {
     if (remaining < 0.06) {
       snapToCell(tx, ty);
       c.stuck = 0;
+      // Real movement happened — whatever stuck streak was being timed
+      // against the position it started at is over, resolved on its own.
+      c.stuckAnchor = null; c.stuckRounds = 0;
       T.pathIdx++;
       if (T.pathIdx >= T.path.length) { c.pose = 'stand'; return true; }
       return false;
@@ -4608,33 +4617,41 @@ function createCritter(world, save) {
     return false;
   }
 
-  /** c.stuck also counts a goto that never got a path at all (see the two
-   *  call sites below) — same meaning, "an attempt to move just failed,"
-   *  just a different reason than a live rejection. Once it's run up
-   *  enough of those in a row — not one bad target, a sustained run of
-   *  them, however many different tasks tried and gave up in between —
-   *  the far more likely explanation is that the critter is genuinely
-   *  walled in by whatever combination of furniture it's standing next to,
-   *  not that it keeps picking unlucky goals. Reported live: two critters
-   *  parked in a corner of a room, permanently "failing" the same action
-   *  over and over a couple of times a second, forever. Relocating to the
-   *  door cell — the same known-open landing spot already used when a
-   *  critter returns from outside — trades a moment of visible "how did I
-   *  get here" for however long the old behaviour would otherwise have
-   *  been quietly wedged in place; the emote/thought/memory line make it a
-   *  noticeable event rather than a silent teleport.
-   *  8 is a real number: THINK_INTERVAL plus a typical short emote/use
-   *  step puts one failed cycle around a second, so this fires only after
-   *  something like 8-12 real seconds of nothing but failure. */
-  function tryEscapeIfStuck() {
-    if (c.stuck < 8) return false;
-    c.stuck = 0;
+  /** A goto that couldn't find any path at all used to hand `false` straight
+   *  back to the run() generator, which — not checking it — sailed on into
+   *  the next step anyway (an emote played in place, then a hard rejection
+   *  at the following use()), finishing the task in well under a second and
+   *  immediately becoming eligible to be picked again. Reported live: two
+   *  critters parked in a corner, "failing" the same action a couple of
+   *  times a second, forever, and the first fix for it (an attempt counter,
+   *  no real pause between attempts) still read as instant even though it
+   *  wasn't literally zero. This instead makes the critter actually stand
+   *  still — no emotes, no retries — for a real 10 seconds before it's
+   *  even eligible to try anything again; see the stuckWaitT countdown in
+   *  the main tick. */
+  function enterStuckWait() {
+    if (!c.stuckAnchor) c.stuckAnchor = [Math.round(c.gx), Math.round(c.gy)];
+    c.stuckWaitT = 10;
+    c.pose = 'stand';
+  }
+
+  /** Only reached once three consecutive 10s waits have all ended with the
+   *  critter still exactly where the streak started — ~30 real seconds of
+   *  nothing changing, not one bad target. At that point the far more
+   *  likely explanation is that it's genuinely walled in by whatever
+   *  furniture it's standing next to, not that it keeps picking unlucky
+   *  goals. Relocating to the door cell — the same known-open landing spot
+   *  already used when a critter returns from outside — trades a moment of
+   *  visible "how did I get here" for whatever's otherwise a permanently
+   *  wedged critter; the emote/thought/memory line make it a noticeable
+   *  event rather than a silent teleport. */
+  function escapeStuck() {
+    c.stuckAnchor = null; c.stuckRounds = 0; c.stuckWaitT = 0;
     c.gx = 0; c.gy = Math.round(DOOR_GY);
     c.px = c.gx; c.py = c.gy;
     c.emotion.pulse(-0.2, 0.4, 'squeezed free after being wedged in place');
     c.think('...how did I even get stuck there?');
     c.memory.log('got boxed in and had to squeeze free');
-    return true;
   }
 
   /** Remember a grid edge rejected by live collision so replanning cannot
@@ -4775,35 +4792,43 @@ function createCritter(world, save) {
     const onIt = canOccupyObject(o) && o.gx <= c.gx && c.gx < o.gx + o.w
       && o.gy <= c.gy && c.gy < o.gy + o.h;
     if (onIt) {
-      // state.face (plain chairs) is defined in world/objects.js as "which
-      // way the seat opens" using this exact 0:+gx 1:+gy 2:-gx 3:-gy scale,
-      // so it drops straight in — confirmed correct.
+      // state.face's own doc comment in world/objects.js describes it as
+      // "which way the seat opens" using a plain 0:+gx 1:+gy 2:-gx 3:-gy
+      // scale — true of the hand-drawn isoBox fallback, which is the only
+      // part of that file that actually reads face as a grid direction.
+      // What draws in practice, whenever the sprite loads (which it does),
+      // is drawSprite(ctx, x, y, 'chairRounded', { angleOffset: face }) —
+      // the exact same call shape kenneyItem furniture uses with
+      // state.rotation, selecting one of the 4 compass-labelled images via
+      // ROT_FILES in sprites.js. Trusting the grid-direction comment over
+      // the sprite that's actually on screen was the bug: this needs the
+      // same compass-label table as state.rotation below, not a pass-
+      // through, and previously got the pass-through specifically because
+      // it looked authoritative. Confirmed live on this sprite specifically
+      // (not just assumed from kenneyItem sharing the mechanism): face 0
+      // and 2 show the seat opening toward and away from camera exactly
+      // like chairDesk's rotation 0/2 did, and face 1 with dir 3 (this
+      // table's answer) reads as a coherent sideways-seated pose, not a
+      // broken one.
       //
-      // state.rotation (kenneyItem sit furniture — armchair, office_chair,
-      // bar_stool, bench) selects which of the 4 compass-labelled sprite
-      // images to show — ROT_FILES in sprites.js: 0:'SE' 1:'NE' 2:'NW'
-      // 3:'SW', verified there against the camera's actual position. c.dir
-      // uses the same compass words in DIRS' own comment: 0:'SE' 1:'SW'
-      // 2:'NW' 3:'NE'. Those two labellings were authored independently, so
-      // matching rotation to the c.dir of the SAME label — not a plain
-      // pass-through, which silently assumes the two scales already agree —
-      // is what actually lines the critter up with the chair: rotation
-      // 0(SE)->dir 0(SE), 1(NE)->dir 3(NE), 2(NW)->dir 2(NW), 3(SW)->dir
-      // 1(SW). Checked directly this time: spawned one office_chair, cycled
-      // all 4 rotations, sat a critter in each via this exact table. 0 and 2
-      // are unambiguous (chair's open side faces toward vs away from
-      // camera; critter shows face vs back to match, confirmed both ways)
-      // and agree with the table either way. 1 and 3 turn the chair exactly
-      // side-on to the camera, which critter.js has no profile pose for —
-      // its face only ever draws for dir 0/1, otherwise the same generic
-      // back-of-head regardless of 2 vs 3 — so neither of THOSE two has a
-      // render that's more "correct" than the other; this table just picks
-      // one consistently instead of leaving it to whatever the critter
-      // happened to be facing when it sat down.
+      // ROT_FILES in sprites.js: 0:'SE' 1:'NE' 2:'NW' 3:'SW', verified
+      // there against the camera's actual position. c.dir uses the same
+      // compass words in DIRS' own comment: 0:'SE' 1:'SW' 2:'NW' 3:'NE'.
+      // Those two labellings were authored independently, so matching a
+      // sprite index to the c.dir of the SAME label is what actually lines
+      // the critter up with the furniture: 0(SE)->dir 0(SE), 1(NE)->dir
+      // 3(NE), 2(NW)->dir 2(NW), 3(SW)->dir 1(SW). 0 and 2 are unambiguous
+      // (chair's open side faces toward vs away from camera; critter shows
+      // face vs back to match) and agree with the table either way. 1 and 3
+      // turn the piece exactly side-on to the camera, which critter.js has
+      // no profile pose for — its face only ever draws for dir 0/1,
+      // otherwise the same generic back-of-head regardless of 2 vs 3 — so
+      // neither of THOSE two has a render that's more "correct" than the
+      // other; this table just picks one consistently instead of leaving it
+      // to whatever the critter happened to be facing when it sat down.
       const ROT_TO_DIR = [0, 3, 2, 1];
-      const facing = o.def.directional
-        ? (o.type === 'chair' ? o.state.face : ROT_TO_DIR[(o.state.rotation ?? 0) & 3])
-        : o.def.faceDir;
+      const spriteIndex = o.type === 'chair' ? o.state.face : (o.state.rotation ?? 0);
+      const facing = o.def.directional ? ROT_TO_DIR[spriteIndex & 3] : o.def.faceDir;
       if (facing != null) { c.dir = facing & 3; return; }
     }
     const cc = world.center(o);
@@ -5001,16 +5026,34 @@ function createCritter(world, save) {
     c.signals.touch = approach(c.signals.touch, 0, 2.2, dt);
 
     // deliberate
-    c.thinkT -= dt;
-    if (c.thinkT <= 0) {
-      c.thinkT = THINK_INTERVAL;
-      const interrupt = c.brain.shouldInterrupt(c, world, c.percept, c.task);
-      if (!c.task || interrupt) {
-        if (c.task && interrupt) { c.asleep = false; finishTask({ preservePosition: true }); }
-        const choice = c.brain.decide(c, world, c.percept);
-        if (choice) startTask(choice);
-      } else if (!c.asleep) {
-        c.brain.observe(c, world, c.percept);
+    if (c.stuckWaitT > 0) {
+      // Standing down after a goto that found nowhere to go at all — see
+      // enterStuckWait. Genuinely does nothing else for the whole 10s: no
+      // decisions, no observing, just standing there, so this doesn't read
+      // as a rapid retry with extra steps in between.
+      c.stuckWaitT = Math.max(0, c.stuckWaitT - dt);
+      if (c.stuckWaitT === 0) {
+        const stillThere = c.stuckAnchor
+          && Math.round(c.gx) === c.stuckAnchor[0] && Math.round(c.gy) === c.stuckAnchor[1];
+        if (stillThere) {
+          c.stuckRounds++;
+          if (c.stuckRounds >= 3) escapeStuck();
+        } else {
+          c.stuckAnchor = null; c.stuckRounds = 0;
+        }
+      }
+    } else {
+      c.thinkT -= dt;
+      if (c.thinkT <= 0) {
+        c.thinkT = THINK_INTERVAL;
+        const interrupt = c.brain.shouldInterrupt(c, world, c.percept, c.task);
+        if (!c.task || interrupt) {
+          if (c.task && interrupt) { c.asleep = false; finishTask({ preservePosition: true }); }
+          const choice = c.brain.decide(c, world, c.percept);
+          if (choice) startTask(choice);
+        } else if (!c.asleep) {
+          c.brain.observe(c, world, c.percept);
+        }
       }
     }
 
@@ -5929,10 +5972,12 @@ function createRenderer(canvas, world) {
     // preferable to the old result where the sofa painted over the critter.
     if (critters) {
       for (const c of critters) {
-        if (c.gx < o.gx || c.gx >= o.gx + o.w || c.gy < o.gy || c.gy >= o.gy + o.h) continue;
-        const activelyUsing = c.task?.cmd?.t === 'use' && c.task.cmd.obj === o;
-        const occupiable = o.def.occupiable || o.def.sit || o.def.lie;
-        if (!c.moving && (activelyUsing || occupiable)) depth = Math.min(depth, depthOfCritter(c) - 0.01);
+        const onCell = c.gx >= o.gx && c.gx < o.gx + o.w && c.gy >= o.gy && c.gy < o.gy + o.h;
+        if (onCell) {
+          const activelyUsing = c.task?.cmd?.t === 'use' && c.task.cmd.obj === o;
+          const occupiable = o.def.occupiable || o.def.sit || o.def.lie;
+          if (!c.moving && (activelyUsing || occupiable)) depth = Math.min(depth, depthOfCritter(c) - 0.01);
+        }
         // Thin wall fragments have the opposite situation from sit furniture:
         // their own filing cell is normal floor (see the wall_seg comment
         // below), so a critter regularly walks straight through it — and for
@@ -5942,9 +5987,20 @@ function createRenderer(canvas, world) {
         // blending, so right at that one crossing px, a full sprite-width
         // swap in either direction is visible as a pop — reported live as
         // the wall briefly rendering in front of a critter walking along it.
-        // Pinning the whole cell to "critter's in it, wall stays behind"
-        // removes the crossover rather than just relocating it.
-        if (o.def.edgeBlock) depth = Math.min(depth, depthOfCritter(c) - 0.01);
+        // A same-CELL gate (onCell above) fixed the crossing in the middle
+        // of the wall's own tile, but not the approach: the critter's
+        // sprite has real pixel width, wide enough to visually reach the
+        // next segment along the wall before its rounded grid cell has
+        // actually caught up (confirmed live by sweeping a continuous
+        // position across a whole row and diffing depth against every
+        // segment within reach, not just the exact cell match) — which
+        // read as the same pop, just at each segment's leading edge instead
+        // of its middle. Checking continuous position within a full tile,
+        // not the rounded cell, covers the segment being approached or just
+        // departed as well as the one currently stood on.
+        if (o.def.edgeBlock && Math.abs(c.px - o.gx) < 1 && Math.abs(c.py - o.gy) < 1) {
+          depth = Math.min(depth, depthOfCritter(c) - 0.01);
+        }
       }
     }
     return depth;
