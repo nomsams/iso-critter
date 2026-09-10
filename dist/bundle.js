@@ -463,10 +463,16 @@ function kenneyItem(label, sprite, opts = {}) {
     w = 1, h = 1, tall = 20, solid = true, acts = [],
     sit = false, lie = false, occupiable = false, seatH = 6, surface = false,
     blocksSight = false, thirsty = false, scale = 1,
+    // Where on the footprint the seat actually is, as a fraction of the
+    // piece's own (current) w/h — 0.5/0.5 is dead center, which is exactly
+    // what every 1x1 piece already got for free before this field existed
+    // (a 1x1 footprint's only cell IS its center). Only matters once a
+    // piece is wider/deeper than one tile — see renderer.js's onIt branch.
+    seatX = 0.5, seatY = 0.5,
   } = opts;
   return {
     label, w, h, tall, solid, acts, sit, lie, occupiable, seatH, surface,
-    blocksSight, thirsty,
+    blocksSight, thirsty, seatX, seatY,
     rotatable: true,
     directional: true,
     rotatesFootprint: w !== h,
@@ -504,6 +510,11 @@ const DEFS = {
   fridge: {
     label: 'fridge', w: 1, h: 1, tall: 30, solid: true, blocksSight: true,
     acts: ['fetch_food'], frontDir: 1,   // door swings open toward +gy, into the room
+    // Where the critter's reach should visually land — the lower door's
+    // handle, roughly a third up the case. reachX/Y are unused while this
+    // is 1x1 (there's only one approach cell either way); reachH feeds the
+    // `reach` pose's height in critter.js.
+    reachX: 0.5, reachY: 0.5, reachH: 10,
     draw(ctx, x, y, o) {
       isoBox(ctx, x, y, 1, 1, 30, PAL.whiteD, PAL.white, PAL.whiteS);
       boxFace(ctx, x, y, 1, 1, 'right', 0.08, 0.92, 1, 17, '#d9d3e6');       // lower door
@@ -518,6 +529,8 @@ const DEFS = {
   stove: {
     label: 'stove', w: 1, h: 1, tall: 18, solid: true,
     acts: ['cook'],
+    // Reaching down to the cooktop itself, not up over the whole appliance.
+    reachX: 0.5, reachY: 0.5, reachH: 18,
     draw(ctx, x, y, o, t) {
       isoBox(ctx, x, y, 1, 1, 18, PAL.steelL, PAL.steel, PAL.steelD);
       isoPlate(ctx, x + 4, y + 2, 0.42, 0.42, 18, PAL.black);
@@ -586,6 +599,7 @@ const DEFS = {
 
   chair: {
     label: 'chair', w: 1, h: 1, tall: 10, solid: false, sit: true, seatH: 6,
+    seatX: 0.5, seatY: 0.5,
     rotatable: true, directional: true,
     acts: ['lounge'],
     // state.face is which way the seat opens: 0=+gx 1=+gy(default) 2=-gx 3=-gy.
@@ -628,6 +642,7 @@ const DEFS = {
     // something derived per-placement — it needs to face into whichever
     // wall the fixture is set against, not out into the room toward camera.
     label: 'toilet', w: 1, h: 1, tall: 16, solid: false, sit: true, seatH: 6, faceDir: 3,
+    seatX: 0.5, seatY: 0.5,
     acts: ['relieve'],
     draw(ctx, x, y) {
       isoBox(ctx, x + 3, y + 4, 0.5, 0.5, 8, PAL.white, PAL.whiteD, PAL.whiteS);
@@ -639,6 +654,7 @@ const DEFS = {
 
   shower: {
     label: 'shower', w: 1, h: 1, tall: 4, solid: false, sit: true,
+    seatX: 0.5, seatY: 0.5,
     acts: ['bathe'],
     draw(ctx, x, y, o, t) {
       isoPlate(ctx, x, y, 1, 1, 0.5, '#93a1ad');
@@ -657,6 +673,7 @@ const DEFS = {
 
   bed: {
     label: 'bed', w: 2, h: 2, tall: 15, solid: false, sit: true, lie: true, seatH: 6,
+    seatX: 0.5, seatY: 0.5,
     rotatable: true, directional: true,
     acts: ['sleep'],
     draw(ctx, x, y, o) {
@@ -672,6 +689,7 @@ const DEFS = {
 
   sofa: {
     label: 'sofa', w: 1, h: 2, tall: 20, solid: false, sit: true, seatH: 8,
+    seatX: 0.5, seatY: 0.5,
     rotatable: true, directional: true, rotatesFootprint: true,
     acts: ['lounge'],
     draw(ctx, x, y, o) {
@@ -1078,6 +1096,7 @@ const DEFS = {
 
   bathtub: {
     label: 'bathtub', w: 1, h: 2, tall: 12, solid: false, sit: true, seatH: 4,
+    seatX: 0.5, seatY: 0.5,
     acts: ['soak'],
     draw(ctx, x, y, o, t) {
       isoBox(ctx, x, y, 1, 2, 10, PAL.whiteS, PAL.white, PAL.whiteD);
@@ -4474,6 +4493,19 @@ function createCritter(world, save) {
           }
           if (cmd.obj) faceObject(cmd.obj);
           if (cmd.emote) setEmote(cmd.emote, cmd.dur);
+          // A multi-cell piece (2x1 sofa, 2x2 bed) has one seat, not one per
+          // filed cell — settle onto the def's own seatX/Y fraction of the
+          // whole footprint rather than staying at whichever cell pathing
+          // happened to land on. Matches the same anchor renderer.js draws
+          // at; snapping the actual logical position here too (not just the
+          // visual) keeps depth-sort and anything else reading c.px/py
+          // consistent with what's on screen. A no-op for every 1x1 piece,
+          // whose only cell already is its center.
+          if (cmd.obj && canOccupyObject(cmd.obj) && cmd.pose && cmd.pose !== 'stand') {
+            c.px = cmd.obj.gx + (cmd.obj.def.seatX ?? 0.5) * cmd.obj.w;
+            c.py = cmd.obj.gy + (cmd.obj.def.seatY ?? 0.5) * cmd.obj.h;
+            c.gx = Math.round(c.px); c.gy = Math.round(c.py);
+          }
         }
         c.pose = cmd.pose || 'stand';
         const before = T.cmdT;
@@ -6044,24 +6076,58 @@ function createRenderer(canvas, world) {
         // than when Math.round() happens to select a different grid cell.
         d: depthOfCritter(c),
         draw: () => {
-          // drawCritter's x/y contract is the NORTH corner of the occupied
-          // tile. It adds HH internally to place the body over the diamond's
-          // centre. Passing the centre here as well added HH twice, which is
-          // exactly one (+1,+1) projected-grid offset toward the south.
-          const x = sx(c.px, c.py);
           // Occupied furniture raises the body to its seat/sleeping surface;
           // ordinary items can never produce this overlap through pathing.
           const rest = world.objectAt(Math.round(c.px), Math.round(c.py));
           const onIt = rest && (rest.def.sit || rest.def.lie)
             && (c.pose === 'sit' || c.pose === 'lie' || c.pose === 'read' || c.asleep);
-          const seat = onIt ? (rest.def.seatH ?? Math.round(rest.def.tall * 0.5)) : 0;
-          const y = sy(c.px, c.py) - seat;
+          // A multi-cell piece (2x1 sofa, 2x2 bed) has one seat, not one per
+          // filed cell — anchor on the def's own seatX/Y fraction of its
+          // *whole* footprint rather than whichever cell pathing happened to
+          // land on, so a 2x2 bed always renders centered on the mattress
+          // instead of over one corner of it. creature.js snaps c.px/py to
+          // this same point when the sit/lie actually starts, so this and
+          // the critter's own logical position agree; recomputing it here
+          // too (rather than trusting that snap alone) is what keeps the
+          // visual right even for the frame it happens on.
+          const ax = onIt ? rest.gx + (rest.def.seatX ?? 0.5) * rest.w : c.px;
+          const ay = onIt ? rest.gy + (rest.def.seatY ?? 0.5) * rest.h : c.py;
+          // drawCritter's x/y contract is the NORTH corner of a tile — it
+          // adds HH internally to descend from that corner to the diamond's
+          // true centre. c.px/py already speak that corner dialect (a
+          // standing critter "at" cell (gx,gy) uses px=gx, not gx+0.5), so
+          // the non-onIt branch above needs no further care. But
+          // rest.gx + seatX*rest.w is a real centre coordinate — the same
+          // gx+w/2 world.center() uses — not a corner, so feeding it in
+          // unchanged would add HH on top of an offset that's already
+          // centred (exactly the "+1,+1 toward the south" mistake this
+          // comment used to warn about, just re-derived for the general
+          // multi-cell case instead of caught by inspection). Subtracting
+          // HH below cancels drawCritter's own addition for this branch only.
+          const x = sx(ax, ay);
+          let seat = onIt ? (rest.def.seatH ?? Math.round(rest.def.tall * 0.5)) : 0;
+          // Reaching (fridge, stove, ...) never occupies the target's own
+          // cell, so it gets no seat lift at all above — but a fridge's
+          // handle and a stove's cooktop are genuinely different heights.
+          // Nudge the whole body a fraction of the way toward the target's
+          // own reachH, relative to a neutral mid-height reach (14, about
+          // where the unadjusted animation already reads correctly) rather
+          // than committing to a full 1:1 lift — the arm's own swing still
+          // does most of the visual work, this just keeps a tall fridge from
+          // reading identically to a low counter.
+          if (!onIt && c.pose === 'reach') {
+            const useObj = c.task?.cmd?.t === 'use' ? c.task.cmd.obj : null;
+            if (useObj?.def.reachH != null) {
+              seat = Math.max(-3, Math.min(3, (useObj.def.reachH - 14) * 0.25));
+            }
+          }
+          const y = sy(ax, ay) - seat - (onIt ? HH : 0);
           drawCritter(ctx, x, y, c, t);
           // Picking, emotes and the plumbob reference the visible body centre,
           // not drawCritter's north-corner input anchor.
           c._screen = {
-            x: sx(c.px + 0.5, c.py + 0.5),
-            y: sy(c.px + 0.5, c.py + 0.5) - seat,
+            x: sx(ax + (onIt ? 0 : 0.5), ay + (onIt ? 0 : 0.5)),
+            y: sy(ax + (onIt ? 0 : 0.5), ay + (onIt ? 0 : 0.5)) - seat,
           };
         },
       });

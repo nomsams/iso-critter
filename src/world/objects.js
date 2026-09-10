@@ -45,10 +45,16 @@ function kenneyItem(label, sprite, opts = {}) {
     w = 1, h = 1, tall = 20, solid = true, acts = [],
     sit = false, lie = false, occupiable = false, seatH = 6, surface = false,
     blocksSight = false, thirsty = false, scale = 1,
+    // Where on the footprint the seat actually is, as a fraction of the
+    // piece's own (current) w/h — 0.5/0.5 is dead center, which is exactly
+    // what every 1x1 piece already got for free before this field existed
+    // (a 1x1 footprint's only cell IS its center). Only matters once a
+    // piece is wider/deeper than one tile — see renderer.js's onIt branch.
+    seatX = 0.5, seatY = 0.5,
   } = opts;
   return {
     label, w, h, tall, solid, acts, sit, lie, occupiable, seatH, surface,
-    blocksSight, thirsty,
+    blocksSight, thirsty, seatX, seatY,
     rotatable: true,
     directional: true,
     rotatesFootprint: w !== h,
@@ -86,6 +92,11 @@ export const DEFS = {
   fridge: {
     label: 'fridge', w: 1, h: 1, tall: 30, solid: true, blocksSight: true,
     acts: ['fetch_food'], frontDir: 1,   // door swings open toward +gy, into the room
+    // Where the critter's reach should visually land — the lower door's
+    // handle, roughly a third up the case. reachX/Y are unused while this
+    // is 1x1 (there's only one approach cell either way); reachH feeds the
+    // `reach` pose's height in critter.js.
+    reachX: 0.5, reachY: 0.5, reachH: 10,
     draw(ctx, x, y, o) {
       isoBox(ctx, x, y, 1, 1, 30, PAL.whiteD, PAL.white, PAL.whiteS);
       boxFace(ctx, x, y, 1, 1, 'right', 0.08, 0.92, 1, 17, '#d9d3e6');       // lower door
@@ -100,6 +111,8 @@ export const DEFS = {
   stove: {
     label: 'stove', w: 1, h: 1, tall: 18, solid: true,
     acts: ['cook'],
+    // Reaching down to the cooktop itself, not up over the whole appliance.
+    reachX: 0.5, reachY: 0.5, reachH: 18,
     draw(ctx, x, y, o, t) {
       isoBox(ctx, x, y, 1, 1, 18, PAL.steelL, PAL.steel, PAL.steelD);
       isoPlate(ctx, x + 4, y + 2, 0.42, 0.42, 18, PAL.black);
@@ -168,6 +181,7 @@ export const DEFS = {
 
   chair: {
     label: 'chair', w: 1, h: 1, tall: 10, solid: false, sit: true, seatH: 6,
+    seatX: 0.5, seatY: 0.5,
     rotatable: true, directional: true,
     acts: ['lounge'],
     // state.face is which way the seat opens: 0=+gx 1=+gy(default) 2=-gx 3=-gy.
@@ -210,6 +224,7 @@ export const DEFS = {
     // something derived per-placement — it needs to face into whichever
     // wall the fixture is set against, not out into the room toward camera.
     label: 'toilet', w: 1, h: 1, tall: 16, solid: false, sit: true, seatH: 6, faceDir: 3,
+    seatX: 0.5, seatY: 0.5,
     acts: ['relieve'],
     draw(ctx, x, y) {
       isoBox(ctx, x + 3, y + 4, 0.5, 0.5, 8, PAL.white, PAL.whiteD, PAL.whiteS);
@@ -221,6 +236,7 @@ export const DEFS = {
 
   shower: {
     label: 'shower', w: 1, h: 1, tall: 4, solid: false, sit: true,
+    seatX: 0.5, seatY: 0.5,
     acts: ['bathe'],
     draw(ctx, x, y, o, t) {
       isoPlate(ctx, x, y, 1, 1, 0.5, '#93a1ad');
@@ -239,6 +255,7 @@ export const DEFS = {
 
   bed: {
     label: 'bed', w: 2, h: 2, tall: 15, solid: false, sit: true, lie: true, seatH: 6,
+    seatX: 0.5, seatY: 0.5,
     rotatable: true, directional: true,
     acts: ['sleep'],
     draw(ctx, x, y, o) {
@@ -254,6 +271,7 @@ export const DEFS = {
 
   sofa: {
     label: 'sofa', w: 1, h: 2, tall: 20, solid: false, sit: true, seatH: 8,
+    seatX: 0.5, seatY: 0.5,
     rotatable: true, directional: true, rotatesFootprint: true,
     acts: ['lounge'],
     draw(ctx, x, y, o) {
@@ -660,6 +678,7 @@ export const DEFS = {
 
   bathtub: {
     label: 'bathtub', w: 1, h: 2, tall: 12, solid: false, sit: true, seatH: 4,
+    seatX: 0.5, seatY: 0.5,
     acts: ['soak'],
     draw(ctx, x, y, o, t) {
       isoBox(ctx, x, y, 1, 2, 10, PAL.whiteS, PAL.white, PAL.whiteD);

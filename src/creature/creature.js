@@ -367,6 +367,19 @@ export function createCritter(world, save) {
           }
           if (cmd.obj) faceObject(cmd.obj);
           if (cmd.emote) setEmote(cmd.emote, cmd.dur);
+          // A multi-cell piece (2x1 sofa, 2x2 bed) has one seat, not one per
+          // filed cell — settle onto the def's own seatX/Y fraction of the
+          // whole footprint rather than staying at whichever cell pathing
+          // happened to land on. Matches the same anchor renderer.js draws
+          // at; snapping the actual logical position here too (not just the
+          // visual) keeps depth-sort and anything else reading c.px/py
+          // consistent with what's on screen. A no-op for every 1x1 piece,
+          // whose only cell already is its center.
+          if (cmd.obj && canOccupyObject(cmd.obj) && cmd.pose && cmd.pose !== 'stand') {
+            c.px = cmd.obj.gx + (cmd.obj.def.seatX ?? 0.5) * cmd.obj.w;
+            c.py = cmd.obj.gy + (cmd.obj.def.seatY ?? 0.5) * cmd.obj.h;
+            c.gx = Math.round(c.px); c.gy = Math.round(c.py);
+          }
         }
         c.pose = cmd.pose || 'stand';
         const before = T.cmdT;

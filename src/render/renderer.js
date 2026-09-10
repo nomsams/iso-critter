@@ -547,24 +547,58 @@ export function createRenderer(canvas, world) {
         // than when Math.round() happens to select a different grid cell.
         d: depthOfCritter(c),
         draw: () => {
-          // drawCritter's x/y contract is the NORTH corner of the occupied
-          // tile. It adds HH internally to place the body over the diamond's
-          // centre. Passing the centre here as well added HH twice, which is
-          // exactly one (+1,+1) projected-grid offset toward the south.
-          const x = sx(c.px, c.py);
           // Occupied furniture raises the body to its seat/sleeping surface;
           // ordinary items can never produce this overlap through pathing.
           const rest = world.objectAt(Math.round(c.px), Math.round(c.py));
           const onIt = rest && (rest.def.sit || rest.def.lie)
             && (c.pose === 'sit' || c.pose === 'lie' || c.pose === 'read' || c.asleep);
-          const seat = onIt ? (rest.def.seatH ?? Math.round(rest.def.tall * 0.5)) : 0;
-          const y = sy(c.px, c.py) - seat;
+          // A multi-cell piece (2x1 sofa, 2x2 bed) has one seat, not one per
+          // filed cell — anchor on the def's own seatX/Y fraction of its
+          // *whole* footprint rather than whichever cell pathing happened to
+          // land on, so a 2x2 bed always renders centered on the mattress
+          // instead of over one corner of it. creature.js snaps c.px/py to
+          // this same point when the sit/lie actually starts, so this and
+          // the critter's own logical position agree; recomputing it here
+          // too (rather than trusting that snap alone) is what keeps the
+          // visual right even for the frame it happens on.
+          const ax = onIt ? rest.gx + (rest.def.seatX ?? 0.5) * rest.w : c.px;
+          const ay = onIt ? rest.gy + (rest.def.seatY ?? 0.5) * rest.h : c.py;
+          // drawCritter's x/y contract is the NORTH corner of a tile — it
+          // adds HH internally to descend from that corner to the diamond's
+          // true centre. c.px/py already speak that corner dialect (a
+          // standing critter "at" cell (gx,gy) uses px=gx, not gx+0.5), so
+          // the non-onIt branch above needs no further care. But
+          // rest.gx + seatX*rest.w is a real centre coordinate — the same
+          // gx+w/2 world.center() uses — not a corner, so feeding it in
+          // unchanged would add HH on top of an offset that's already
+          // centred (exactly the "+1,+1 toward the south" mistake this
+          // comment used to warn about, just re-derived for the general
+          // multi-cell case instead of caught by inspection). Subtracting
+          // HH below cancels drawCritter's own addition for this branch only.
+          const x = sx(ax, ay);
+          let seat = onIt ? (rest.def.seatH ?? Math.round(rest.def.tall * 0.5)) : 0;
+          // Reaching (fridge, stove, ...) never occupies the target's own
+          // cell, so it gets no seat lift at all above — but a fridge's
+          // handle and a stove's cooktop are genuinely different heights.
+          // Nudge the whole body a fraction of the way toward the target's
+          // own reachH, relative to a neutral mid-height reach (14, about
+          // where the unadjusted animation already reads correctly) rather
+          // than committing to a full 1:1 lift — the arm's own swing still
+          // does most of the visual work, this just keeps a tall fridge from
+          // reading identically to a low counter.
+          if (!onIt && c.pose === 'reach') {
+            const useObj = c.task?.cmd?.t === 'use' ? c.task.cmd.obj : null;
+            if (useObj?.def.reachH != null) {
+              seat = Math.max(-3, Math.min(3, (useObj.def.reachH - 14) * 0.25));
+            }
+          }
+          const y = sy(ax, ay) - seat - (onIt ? HH : 0);
           drawCritter(ctx, x, y, c, t);
           // Picking, emotes and the plumbob reference the visible body centre,
           // not drawCritter's north-corner input anchor.
           c._screen = {
-            x: sx(c.px + 0.5, c.py + 0.5),
-            y: sy(c.px + 0.5, c.py + 0.5) - seat,
+            x: sx(ax + (onIt ? 0 : 0.5), ay + (onIt ? 0 : 0.5)),
+            y: sy(ax + (onIt ? 0 : 0.5), ay + (onIt ? 0 : 0.5)) - seat,
           };
         },
       });
