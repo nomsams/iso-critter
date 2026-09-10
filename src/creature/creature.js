@@ -300,6 +300,8 @@ export function createCritter(world, save) {
           const free = cmd.cells.filter(([x, y]) => !avoid.has(x + ',' + y));
           if (!free.length) {
             T.lastResult = false; T.cmd = null; T.gotoFailed = true; T.fails = (T.fails || 0) + 1;
+            c.stuck++;
+            if (tryEscapeIfStuck()) { finishTask(); return; }
             if (T.fails > 2) { c.think('someone else is there.'); finishTask(); return; }
             continue;
           }
@@ -312,6 +314,8 @@ export function createCritter(world, save) {
             // Unreachable. Hand `false` back so the action can bail gracefully;
             // give up entirely if it keeps asking for places it cannot get to.
             T.lastResult = false; T.cmd = null; T.gotoFailed = true; T.fails = (T.fails || 0) + 1;
+            c.stuck++;
+            if (tryEscapeIfStuck()) { finishTask(); return; }
             if (T.fails > 2) {
               c.emotion.pulse(-0.3, 0.45, 'could not get there');
               c.think("can't get to it.");
@@ -495,6 +499,35 @@ export function createCritter(world, save) {
     clampToRoom(false);
     c.bob += dt * 9;
     return false;
+  }
+
+  /** c.stuck also counts a goto that never got a path at all (see the two
+   *  call sites below) — same meaning, "an attempt to move just failed,"
+   *  just a different reason than a live rejection. Once it's run up
+   *  enough of those in a row — not one bad target, a sustained run of
+   *  them, however many different tasks tried and gave up in between —
+   *  the far more likely explanation is that the critter is genuinely
+   *  walled in by whatever combination of furniture it's standing next to,
+   *  not that it keeps picking unlucky goals. Reported live: two critters
+   *  parked in a corner of a room, permanently "failing" the same action
+   *  over and over a couple of times a second, forever. Relocating to the
+   *  door cell — the same known-open landing spot already used when a
+   *  critter returns from outside — trades a moment of visible "how did I
+   *  get here" for however long the old behaviour would otherwise have
+   *  been quietly wedged in place; the emote/thought/memory line make it a
+   *  noticeable event rather than a silent teleport.
+   *  8 is a real number: THINK_INTERVAL plus a typical short emote/use
+   *  step puts one failed cycle around a second, so this fires only after
+   *  something like 8-12 real seconds of nothing but failure. */
+  function tryEscapeIfStuck() {
+    if (c.stuck < 8) return false;
+    c.stuck = 0;
+    c.gx = 0; c.gy = Math.round(DOOR_GY);
+    c.px = c.gx; c.py = c.gy;
+    c.emotion.pulse(-0.2, 0.4, 'squeezed free after being wedged in place');
+    c.think('...how did I even get stuck there?');
+    c.memory.log('got boxed in and had to squeeze free');
+    return true;
   }
 
   /** Remember a grid edge rejected by live collision so replanning cannot

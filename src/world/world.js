@@ -187,8 +187,15 @@ export function createWorld() {
       if (world._blocked[y * COLS + x] !== 0) return false;
       // Mobile toys cannot live in the static collision bitmap because their
       // position changes continuously, but their current cell still belongs
-      // to them and must not be selected as a critter path cell.
+      // to them and must not be selected as a critter path cell — while
+      // they're actually in motion. A toy that's rolled to a stop is just a
+      // small prop sitting on the floor, no different from anything else
+      // non-solid; blocking its cell even at rest let a ball that happened
+      // to settle in a doorway-width gap seal off everyone on one side with
+      // no way through until something moved it again (rollMobile uses this
+      // same 0.04 speed floor to decide a roll has finished).
       return !objects.some((o) => o !== ignoreObject && o.def.mobile
+        && (o.hop > 0 || Math.hypot(o.vx, o.vy) > 0.04)
         && Math.round(o.fx) === x && Math.round(o.fy) === y);
     },
 
