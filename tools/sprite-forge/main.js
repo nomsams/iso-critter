@@ -334,7 +334,18 @@ const state = {
   // it, holding an item — ring-approached furniture). See the comment above
   // buildCritterReference() for why these two placements differ.
   critterPose: 'stand',
-  poseHeight: { sit: 0.24, lie: 0.09, reach: 0.32 },
+  // x/y are footprint fractions (0..1 across fpW/fpH — same convention as
+  // seatX/seatY in objects.js, so these paste straight across); h is a
+  // world-unit height, converted to game px via GAME_PX_PER_UNIT for the
+  // readout/export. 'reach' has no x/y of its own: its position is governed
+  // entirely by the approach side + gap in layoutCritterPose, matching how
+  // adjacentCells()-based furniture is actually used in the game (stand
+  // beside it, not at a free point on top of it).
+  poseAnchor: {
+    sit: { x: 0.5, y: 0.5, h: 0.24 },
+    lie: { x: 0.5, y: 0.5, h: 0.09 },
+    reach: { h: 0.32 },
+  },
   // Which side(s) of the footprint this piece can actually be used from —
   // 'all' (workbench/plant/lamp/aquarium), 'front' (fridge/bookshelf, only
   // frontDir), 'notback' (TV, every side but backDir). frontDir doubles as
@@ -384,15 +395,15 @@ function layoutCritterPose(fpW, fpH) {
   heldItemMesh.visible = false;
 
   if (state.critterPose === 'sit') {
-    const seatY = state.poseHeight.sit;
+    const a = state.poseAnchor.sit;
     critterPoseGroup.scale.set(1.08, 0.62, 1.05); // squashed down onto the seat, same idea as pose==='sit' in critter.js
     critterPoseGroup.rotation.y = facingAngle(state.frontDir); // faces the piece's own open/front side, same as a chair's state.face
-    critterGroup.position.set(fpW / 2, seatY, fpH / 2);
+    critterGroup.position.set(fpW * a.x, a.h, fpH * a.y);
   } else if (state.critterPose === 'lie') {
-    const lieY = state.poseHeight.lie;
+    const a = state.poseAnchor.lie;
     critterPoseGroup.rotation.z = Math.PI / 2; // on its side
     critterPoseGroup.scale.set(0.62, 1.35, 1.05);
-    critterGroup.position.set(fpW / 2, lieY + h * 0.28, fpH / 2);
+    critterGroup.position.set(fpW * a.x, a.h + h * 0.28, fpH * a.y);
   } else if (state.critterPose === 'reach') {
     // Only stand somewhere this piece can actually be used from — a fridge
     // with approachMode 'front' has exactly one valid side (its frontDir);
@@ -408,7 +419,7 @@ function layoutCritterPose(fpW, fpH) {
     critterGroup.position.set(px, 0, pz);
     critterPoseGroup.rotation.y = facingAngle((state.reachSide + 2) & 3); // faces back toward the piece it's standing beside
     heldItemMesh.visible = true;
-    heldItemMesh.position.set(-dx * 0.22, state.poseHeight.reach, -dz * 0.22); // toward the object from wherever the critter's standing
+    heldItemMesh.position.set(-dx * 0.22, state.poseAnchor.reach.h, -dz * 0.22); // toward the object from wherever the critter's standing
   } else {
     critterGroup.position.set(fpW / 2, 0, fpH + 0.32); // just past the footprint's far edge, for scale comparison
   }
@@ -626,7 +637,7 @@ function applyAutoFit() {
   $('scale').value = state.scale; $('v-scale').textContent = state.scale.toFixed(2);
   $('offx').value = 0; $('offy').value = 0; $('offz').value = 0;
   $('v-offx').textContent = '0.00'; $('v-offy').textContent = '0.00'; $('v-offz').textContent = '0.00';
-  resetPoseHeightsToModel(rawSize.y * state.scale);
+  resetPoseAnchorsToModel(rawSize.y * state.scale);
 }
 
 /** A fixed default seat/lie/grab height is wrong as often as it's right —
@@ -637,19 +648,111 @@ function applyAutoFit() {
  *  units tall left the fixed 0.09 lie-height completely hidden inside the
  *  mattress). Runs on every load/re-fit, so it always tracks the current
  *  model — hand-tuned values only survive within that same model's session. */
-function resetPoseHeightsToModel(fittedHeight) {
+function resetPoseAnchorsToModel(fittedHeight) {
   const h = Math.max(0.02, fittedHeight || 0.3);
-  state.poseHeight.sit = +(h * 0.42).toFixed(2);
-  state.poseHeight.lie = +(h * 0.8).toFixed(2);
-  state.poseHeight.reach = +(h * 0.55).toFixed(2);
-  const info = POSE_INFO[state.critterPose];
-  if (info?.height) {
-    const slider = $('pose-height');
-    slider.max = Math.max(1, h * 1.3).toFixed(2);
-    slider.value = state.poseHeight[info.height.key];
-    $('v-pose-height').textContent = state.poseHeight[info.height.key].toFixed(2);
-  }
+  state.poseAnchor.sit = { x: 0.5, y: 0.5, h: +(h * 0.42).toFixed(2) };
+  state.poseAnchor.lie = { x: 0.5, y: 0.5, h: +(h * 0.8).toFixed(2) };
+  state.poseAnchor.reach.h = +(h * 0.55).toFixed(2);
+  syncPoseControlsFromState();
 }
+
+/** Raycast straight down across the model's own footprint against its real
+ *  mesh and propose the largest flat surface as the seat/lie point — this
+ *  is genuine geometry analysis (the loaded .glb has real 3D data), not a
+ *  guess from a flattened image. Bucket hits by height (a backrest and a
+ *  seat cushion are almost never the same height), score each bucket by
+ *  how much of the sampled area it actually covers weighted toward the
+ *  LOWER of any close contenders (a wide backrest top can rival a seat's
+ *  own area on some chairs — the seat is the one you'd rest on, and that's
+ *  reliably the lower of the two), and reject anything implausibly close
+ *  to the floor unless nothing else cleared the size bar at all. Only
+ *  meant to get you close; drag or use the sliders to correct it. */
+function autoDetectSeat() {
+  if (!currentModel) { setStatus('load a model first', true); return; }
+  const key = POSE_INFO[state.critterPose].key;
+  if (key !== 'sit' && key !== 'lie') return;
+  wrapper.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(wrapper);
+  const sizeY = box.max.y - box.min.y;
+  if (sizeY <= 0) { setStatus('auto-detect: model has no height to raycast against', true); return; }
+  const N = 24;
+  const marginFrac = 0.05; // stay inside the raw edges so grazing rim hits don't dominate
+  const minX = box.min.x + (box.max.x - box.min.x) * marginFrac;
+  const maxX = box.max.x - (box.max.x - box.min.x) * marginFrac;
+  const minZ = box.min.z + (box.max.z - box.min.z) * marginFrac;
+  const maxZ = box.max.z - (box.max.z - box.min.z) * marginFrac;
+  const rayFrom = box.max.y + Math.max(0.5, sizeY);
+  const raycaster = new THREE.Raycaster();
+  raycaster.far = rayFrom - box.min.y + 0.5;
+  const hits = [];
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
+      const wx = minX + (maxX - minX) * (i + 0.5) / N;
+      const wz = minZ + (maxZ - minZ) * (j + 0.5) / N;
+      raycaster.set(new THREE.Vector3(wx, rayFrom, wz), new THREE.Vector3(0, -1, 0));
+      const hit = raycaster.intersectObject(currentModel, true)[0];
+      if (hit) hits.push({ x: wx, z: wz, y: hit.point.y });
+    }
+  }
+  if (!hits.length) { setStatus('auto-detect found no surface — check the model loaded correctly', true); return; }
+  const eps = Math.max(0.006, sizeY * 0.02);
+  const buckets = new Map();
+  for (const p of hits) {
+    const bk = Math.round(p.y / eps);
+    if (!buckets.has(bk)) buckets.set(bk, []);
+    buckets.get(bk).push(p);
+  }
+  let best = null, bestScore = -Infinity;
+  for (const pts of buckets.values()) {
+    if (pts.length < hits.length * 0.08) continue; // too small a sliver to be a real seat
+    const y = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+    const floorish = (y - box.min.y) < sizeY * 0.12;
+    const score = pts.length - (floorish ? hits.length : 0) - (y - box.min.y) * (hits.length * 0.5);
+    if (score > bestScore) { bestScore = score; best = { y, pts }; }
+  }
+  if (!best) { setStatus('auto-detect: nothing large enough stood out — left the anchor where it was', true); return; }
+  const cx = best.pts.reduce((s, p) => s + p.x, 0) / best.pts.length;
+  const cz = best.pts.reduce((s, p) => s + p.z, 0) / best.pts.length;
+  const a = state.poseAnchor[key];
+  a.x = Math.min(1, Math.max(0, +(cx / state.fpW).toFixed(2)));
+  a.y = Math.min(1, Math.max(0, +(cz / state.fpH).toFixed(2)));
+  a.h = +best.y.toFixed(2);
+  syncPoseControlsFromState();
+  layout();
+  setStatus(`auto-detect: found a surface covering ${Math.round(best.pts.length / hits.length * 100)}% of the sampled area`);
+}
+
+/** Click-and-drag directly on the model to place the seat/lie anchor by
+ *  hand — the primary way to correct Auto-detect's guess (or place it from
+ *  scratch). A single raycast hit supplies x, y AND height together: drag
+ *  across the visible seat surface and the marker follows whatever it's
+ *  actually resting on, rather than needing separate X/Z-plane and height
+ *  gestures. Only live for sit/lie (reach has no free X/Y — see POSE_INFO),
+ *  and only against the export camera, not while free-look orbiting. */
+let dragging = false;
+function anchorFromPointer(evt) {
+  const key = POSE_INFO[state.critterPose].key;
+  if ((key !== 'sit' && key !== 'lie') || !currentModel || state.freelook) return false;
+  const rect = renderer.domElement.getBoundingClientRect();
+  const ndc = new THREE.Vector2(
+    ((evt.clientX - rect.left) / rect.width) * 2 - 1,
+    -((evt.clientY - rect.top) / rect.height) * 2 + 1,
+  );
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(ndc, isoCamera);
+  const hit = raycaster.intersectObject(currentModel, true)[0];
+  if (!hit) return false;
+  const a = state.poseAnchor[key];
+  a.x = Math.min(1, Math.max(0, +(hit.point.x / state.fpW).toFixed(2)));
+  a.y = Math.min(1, Math.max(0, +(hit.point.z / state.fpH).toFixed(2)));
+  a.h = +hit.point.y.toFixed(2);
+  syncPoseControlsFromState();
+  layout();
+  return true;
+}
+renderer.domElement.addEventListener('pointerdown', (e) => { dragging = anchorFromPointer(e); });
+renderer.domElement.addEventListener('pointermove', (e) => { if (dragging) anchorFromPointer(e); });
+window.addEventListener('pointerup', () => { dragging = false; });
 
 function loadFromFile(file) {
   const url = URL.createObjectURL(file);
@@ -754,37 +857,77 @@ $('show-grid').addEventListener('change', (e) => { state.showGrid = e.target.che
 $('show-critter').addEventListener('change', (e) => { state.showCritter = e.target.checked; layout(); });
 
 // Critter pose — see layoutCritterPose() for what each one actually does.
+// `key` names which slot of state.poseAnchor a pose reads/writes; its
+// absence (stand) means "no anchor at all," the plain beside-the-piece
+// scale reference with nothing to drag, detect or export.
 const POSE_INFO = {
-  stand: { explainer: "Beside the piece — same as the scale reference, just named for what it's checking.", height: null },
+  stand: { explainer: "Beside the piece — same as the scale reference, just named for what it's checking." },
   sit: {
-    explainer: 'On top of the footprint, like a chair/sofa (an occupiable piece — the game targets the cell itself, not a ring around it). Dial the height to match the model\'s actual seat, then use that value for seatH on the furniture def.',
-    height: { key: 'sit', label: 'Seat height', min: 0, max: 1 },
+    explainer: 'On top of the footprint, like a chair/sofa (an occupiable piece — the game targets the cell itself, not a ring around it). Drag the marker onto the model\'s actual seat (or click Auto-detect), then paste the readout below into seatX/seatY/seatH on the furniture def.',
+    key: 'sit', heightLabel: 'Seat height', heightMax: 1,
   },
   lie: {
-    explainer: "On top of the footprint, like a bed. Dial the height to match the mattress top.",
-    height: { key: 'lie', label: 'Lie height', min: 0, max: 0.6 },
+    explainer: "On top of the footprint, like a bed. Drag onto the mattress top, or Auto-detect. Shares the same seatX/Y/H fields as sit — a piece with both sit and lie true (a bed) gets one anchor for both.",
+    key: 'lie', heightLabel: 'Lie height', heightMax: 0.6,
   },
   reach: {
-    explainer: "Beside the footprint, like a fridge/bookshelf/coffee machine (ring-approached — goto(approachCells) then use(...,{pose:'reach'}) in actions.js). The small block is the held item (c.holding in creature.js) — dial its height to where a grabbed item should appear.",
-    height: { key: 'reach', label: 'Grab height', min: 0, max: 1 },
+    explainer: "Beside the footprint, like a fridge/bookshelf/coffee machine (ring-approached — goto(approachCells) then use(...,{pose:'reach'}) in actions.js). The small block is the held item (c.holding in creature.js) — dial its height to where a grabbed item should appear, then paste it into reachH.",
+    key: 'reach', heightLabel: 'Grab height', heightMax: 1,
   },
 };
+/** Pushes state.poseAnchor[currentPose] into every control that displays it
+ *  (sliders, labels, the paste-ready readout) — the one place all of those
+ *  get kept in sync, called after a pose switch, a model (re)fit, a drag on
+ *  the model, or Auto-detect, so none of those paths can drift from the
+ *  others. */
+function syncPoseControlsFromState() {
+  const pose = state.critterPose, info = POSE_INFO[pose];
+  const heightRow = $('pose-height-row'), xyRow = $('pose-xy-row'), autoBtn = $('auto-detect-seat'),
+    xyHint = $('pose-xy-hint'), outputRow = $('anchor-output-row');
+  if (!info.key) {
+    heightRow.hidden = true; xyRow.hidden = true; autoBtn.hidden = true;
+    xyHint.hidden = true; outputRow.hidden = true;
+    updateAnchorOutput();
+    return;
+  }
+  const a = state.poseAnchor[info.key];
+  heightRow.hidden = false;
+  outputRow.hidden = false;
+  $('pose-height-label').textContent = info.heightLabel;
+  $('pose-height').max = info.heightMax;
+  $('pose-height').value = a.h;
+  $('v-pose-height').textContent = a.h.toFixed(2);
+  const hasXY = 'x' in a;
+  xyRow.hidden = !hasXY;
+  autoBtn.hidden = !hasXY;
+  xyHint.hidden = !hasXY;
+  if (hasXY) {
+    $('pose-x').value = a.x; $('v-pose-x').textContent = a.x.toFixed(2);
+    $('pose-y').value = a.y; $('v-pose-y').textContent = a.y.toFixed(2);
+  }
+  updateAnchorOutput();
+}
+/** The paste-ready readout: seatX/seatY/seatH for sit/lie (both share one
+ *  set of fields on the def, so whichever of the two you're previewing is
+ *  shown as "seat*" either way), reachH alone for reach (reachX/Y stay at
+ *  their def default — see the reachH-only comment on fridge/stove in
+ *  objects.js, there's no free X/Y position for a ring-approached piece). */
+function updateAnchorOutput() {
+  const out = $('anchor-output');
+  if (!out) return;
+  const pose = state.critterPose, info = POSE_INFO[pose];
+  if (!info.key) { out.value = ''; return; }
+  const a = state.poseAnchor[info.key];
+  const h = Math.round(a.h * GAME_PX_PER_UNIT);
+  out.value = 'x' in a
+    ? `seatX: ${a.x.toFixed(2)}, seatY: ${a.y.toFixed(2)}, seatH: ${h},`
+    : `reachH: ${h},`;
+}
 function setCritterPose(pose) {
   state.critterPose = pose;
   for (const btn of $('pose-buttons').children) btn.classList.toggle('active', btn.dataset.pose === pose);
-  const info = POSE_INFO[pose];
-  $('pose-explainer').textContent = info.explainer;
-  const heightRow = $('pose-height-row');
-  if (info.height) {
-    heightRow.hidden = false;
-    $('pose-height-label').textContent = info.height.label;
-    $('pose-height').min = info.height.min;
-    $('pose-height').max = info.height.max;
-    $('pose-height').value = state.poseHeight[info.height.key];
-    $('v-pose-height').textContent = state.poseHeight[info.height.key].toFixed(2);
-  } else {
-    heightRow.hidden = true;
-  }
+  $('pose-explainer').textContent = POSE_INFO[pose].explainer;
+  syncPoseControlsFromState();
   refreshApproachUI();
   layout();
 }
@@ -792,11 +935,21 @@ for (const btn of $('pose-buttons').children) {
   btn.addEventListener('click', () => setCritterPose(btn.dataset.pose));
 }
 $('pose-height').addEventListener('input', (e) => {
-  const key = POSE_INFO[state.critterPose].height.key;
-  state.poseHeight[key] = Number(e.target.value);
-  $('v-pose-height').textContent = state.poseHeight[key].toFixed(2);
+  state.poseAnchor[POSE_INFO[state.critterPose].key].h = Number(e.target.value);
+  syncPoseControlsFromState();
   layout();
 });
+$('pose-x').addEventListener('input', (e) => {
+  state.poseAnchor[POSE_INFO[state.critterPose].key].x = Number(e.target.value);
+  syncPoseControlsFromState();
+  layout();
+});
+$('pose-y').addEventListener('input', (e) => {
+  state.poseAnchor[POSE_INFO[state.critterPose].key].y = Number(e.target.value);
+  syncPoseControlsFromState();
+  layout();
+});
+$('auto-detect-seat').addEventListener('click', autoDetectSeat);
 
 // Approach direction — which side(s) this piece can be used from, and (for
 // reach/grab) which of those valid sides is currently being previewed. See
@@ -986,6 +1139,6 @@ layout();
 window.spriteForge = {
   scene, wrapper, footprintGroup, groundGroup, critterGroup, critterPoseGroup, heldItemMesh,
   isoCamera, state, THREE, renderer, renderFrame, layout, captureCurrentRotation, setCritterPose,
-  validApproachSides, cycleReachSide, applyTallCapSquash,
+  validApproachSides, cycleReachSide, applyTallCapSquash, autoDetectSeat, syncPoseControlsFromState,
 };
 })();
