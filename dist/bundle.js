@@ -7683,6 +7683,20 @@ document.getElementById('btn-reset').addEventListener('click', () => {
   localStorage.removeItem(SAVE_KEY);
   location.reload();
 });
+document.getElementById('btn-export-layout').addEventListener('click', exportLayout);
+document.getElementById('btn-import-layout').addEventListener('click', () => {
+  document.getElementById('import-layout-input').click();
+});
+document.getElementById('import-layout-input').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  if (!confirm(`Replace the current room layout with "${file.name}"? Your critter(s) are kept; furniture and room state are not.`)) {
+    e.target.value = '';
+    return;
+  }
+  importLayoutFile(file);
+  e.target.value = '';   // so picking the same file twice in a row still fires 'change'
+});
 
 const SPEED_KEYS = { 1: 1, 2: 4, 3: 16 };
 
@@ -7731,6 +7745,65 @@ function loadSave() {
     const raw = localStorage.getItem(SAVE_KEY);
     return raw ? JSON.parse(raw) : null;
   } catch { return null; }
+}
+
+// -------------------------------------------------------- layout export/import
+//
+// world.serialize()/restore() already exist for the localStorage autosave —
+// this just gets that same furniture-and-room data (position, rotation,
+// open/closed, everything in world.js's serialize()) in and out as a file,
+// so a layout can be backed up, shared, or handed to another save. Deliberately
+// just the world half, not critters: the ask was specifically to save
+// furniture, and dropping someone else's critter into your own household on
+// import would be a much bigger, unrelated surprise.
+
+function exportLayout() {
+  const blob = new Blob(
+    [JSON.stringify({ kind: 'iso-critter-layout', v: 1, world: world.serialize() }, null, 2)],
+    { type: 'application/json' },
+  );
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'iso-critter-layout.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  flash('layout exported');
+}
+
+/** Applied via the SAME startup path a normal save goes through (write to
+ *  localStorage, reload) rather than calling world.restore() on the live,
+ *  running world directly — restore() assumes it's resuming its own save
+ *  (it only prunes *default* furniture missing from the file, so it can't
+ *  tell a deliberately-removed custom piece from one that just belongs to a
+ *  different layout) and critters mid-task can hold direct references to
+ *  objects a live restore might delete out from under them. A fresh
+ *  createWorld() on reload sidesteps both: it rebuilds the full shipped set
+ *  before restore() ever runs, the same guarantee an ordinary save relies on. */
+function importLayoutFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    let data;
+    try { data = JSON.parse(reader.result); } catch { flash("that file isn't valid JSON"); return; }
+    const layout = data && data.world && Array.isArray(data.world.objects) ? data.world
+      : Array.isArray(data.objects) ? data // also accept a raw world.serialize() dump, unwrapped
+      : null;
+    if (!layout) { flash("that doesn't look like a layout file"); return; }
+    const existing = loadSave() || { v: 2, critters: [] };
+    existing.world = layout;
+    saveSuspended = true;   // otherwise beforeunload's autosave races the reload and overwrites the import
+    try {
+      localStorage.setItem(SAVE_KEY, JSON.stringify(existing));
+    } catch (err) {
+      saveSuspended = false;
+      flash('import failed: ' + (err.message || err));
+      return;
+    }
+    location.reload();
+  };
+  reader.onerror = () => flash('could not read that file');
+  reader.readAsText(file);
 }
 
 setInterval(doSave, 20000);

@@ -238,6 +238,12 @@
         <button id="btn-reset">new critter</button>
       </div>
       <p class="note">Autosaves every 20 s to localStorage.</p>
+      <div class="row">
+        <button id="btn-export-layout" title="Download the room's furniture and state as a JSON file">export layout</button>
+        <button id="btn-import-layout" title="Load furniture and room state from a JSON file">import layout</button>
+        <input id="import-layout-input" type="file" accept=".json,application/json" hidden>
+      </div>
+      <p class="note">Layout files hold furniture &amp; room state (position, rotation, open/closed) — not your critter.</p>
     </div>
   </aside>
 

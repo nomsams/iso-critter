@@ -129,8 +129,11 @@ details > *:not(summary){margin-top:8px}
   padding:4px 8px 6px; border-bottom:1px solid var(--line); margin-bottom:2px}
 
 /* item selection is deliberately separate from moving: the first click only
-   identifies the piece; Move (or a second click on it) arms relocation. */
-#item-inspector{position:absolute; left:50%; bottom:34px; transform:translateX(-50%);
+   identifies the piece; Move (or a second click on it) arms relocation.
+   Anchored bottom-right (not centered) — that corner of the stage is
+   otherwise empty, and it keeps this clear of #hint, which sits centered
+   along the same bottom edge. */
+#item-inspector{position:absolute; right:12px; bottom:34px;
   display:grid; grid-template-columns:minmax(120px,1fr) auto; gap:7px 14px; align-items:center;
   min-width:300px; max-width:min(92%,480px); padding:9px 10px;
   background:rgba(20,17,30,.96); border:1px solid var(--accent); border-radius:9px;
@@ -198,7 +201,10 @@ details > *:not(summary){margin-top:8px}
   #critter-switch{flex-wrap:wrap}
   #toolbar{flex-wrap:wrap; justify-content:center; max-width:96%; row-gap:6px}
   #edit-palette,#paint-panel{max-width:96%; right:6px}
-  #item-inspector{bottom:34px; min-width:min(92%,360px)}
+  /* the bottom-right corner anchor only really pays off with room to spare;
+     on a narrow stage, span the width instead so it doesn't get squeezed
+     into one corner or spill past the edge. */
+  #item-inspector{right:6px; left:6px; bottom:34px; min-width:0}
   #shortcuts-legend{right:6px; left:6px; max-width:none}
   .sep{display:none}
 }
