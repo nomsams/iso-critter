@@ -638,25 +638,13 @@ const DEFS = {
     },
   },
 
-  toilet: {
-    // Sat on, not approached — a stand-beside-and-use toilet always looked
-    // wrong next to a bathtub/shower that are properly entered. Joining the
-    // same occupiable category (footprint becomes the destination, not a
-    // ring around it) fixes both the pose and the position at once.
-    // faceDir 3 (-gy): the art isn't wall-mounted or rotatable, it's always
-    // drawn the same way, so this is a fixed compass direction rather than
-    // something derived per-placement — it needs to face into whichever
-    // wall the fixture is set against, not out into the room toward camera.
-    label: 'toilet', w: 1, h: 1, tall: 16, solid: false, sit: true, seatH: 6, faceDir: 3,
-    seatX: 0.5, seatY: 0.5,
-    acts: ['relieve'],
-    draw(ctx, x, y) {
-      isoBox(ctx, x + 3, y + 4, 0.5, 0.5, 8, PAL.white, PAL.whiteD, PAL.whiteS);
-      isoPlate(ctx, x + 3, y + 3, 0.58, 0.58, 9, PAL.whiteS);
-      isoPlate(ctx, x + 3, y + 3, 0.36, 0.36, 9.3, '#a9c6d6');
-      isoBox(ctx, x - 4, y - 3, 0.5, 0.5, 16, PAL.white, PAL.whiteD, PAL.whiteS);
-    },
-  },
+  // Sat on, not approached — a stand-beside-and-use toilet always looked
+  // wrong next to a bathtub/shower that are properly entered. Sprite-backed
+  // (not hand-drawn) so it can rotate like a chair: seatX/Y/H measured live
+  // in sprite-forge's Auto-detect against the real toiletSquare model.
+  toilet: kenneyItem('toilet', 'toiletSquare', {
+    tall: 18, solid: false, sit: true, seatH: 20, acts: ['relieve'],
+  }),
 
   shower: {
     label: 'shower', w: 1, h: 1, tall: 4, solid: false, sit: true,
@@ -1108,17 +1096,20 @@ const DEFS = {
     },
   },
 
+  // Sprite-backed (not hand-drawn) so it can rotate like a chair; keeps its
+  // own draw() rather than going through the plain kenneyItem() factory so
+  // the running-water splash overlay (o.state.on, set by the 'soak' action)
+  // still layers on top. seatX/Y/H from sprite-forge's Auto-detect against
+  // the real bathtub model.
   bathtub: {
-    label: 'bathtub', w: 1, h: 2, tall: 12, solid: false, sit: true, seatH: 4,
-    // The water plate below is drawn 0.82x1.7 centered on (x,y) directly —
-    // i.e. it isn't quite centered on the full 1x2 footprint (0.82/1=0.41,
-    // 1.7/2=0.85÷2=0.425) — so match that rather than the footprint's own
-    // geometric center.
-    seatX: 0.41, seatY: 0.425,
+    label: 'bathtub', w: 1, h: 2, tall: 12, solid: false, sit: true, seatH: 3,
+    seatX: 0.49, seatY: 0.5,
+    rotatable: true, directional: true, rotatesFootprint: true,
     acts: ['soak'],
     draw(ctx, x, y, o, t) {
-      isoBox(ctx, x, y, 1, 2, 10, PAL.whiteS, PAL.white, PAL.whiteD);
-      isoPlate(ctx, x, y, 0.82, 1.7, 12, '#a9c6d6');
+      if (!drawSprite(ctx, x, y, 'bathtub', { w: o.w, h: o.h, angleOffset: o.state.rotation ?? 0 })) {
+        isoBox(ctx, x, y, o.w, o.h, 10, PAL.whiteS, PAL.white, PAL.whiteD);
+      }
       if (o.state.on) {
         ctx.fillStyle = 'rgba(255,255,255,0.6)';
         for (let i = 0; i < 4; i++) {
@@ -1390,6 +1381,11 @@ const PRICES = {
   armchair: 40, bench: 35, coffee_table: 30, desk: 50, office_chair: 25,
   side_table: 20, small_plant: 10, radio: 25, storage_box: 8,
   bar_stool: 18, storage_cabinet: 40,
+  // Shipped only in the default layout until now — placeable in the editor
+  // but missing here, which via the `?? 0` fallback everywhere this is read
+  // made every one of them free to drop an unlimited number of.
+  fridge: 80, stove: 70, counter: 40, sink: 35,
+  toilet: 50, shower: 55, bed: 100, vent: 15,
 };
 
 
